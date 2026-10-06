@@ -320,3 +320,74 @@ describe('night-phase: 預言家查驗', () => {
     expect(run([{ type: 'seerCheck', user: 'p4', target: 'p4' }], state).events).toEqual([]);
   });
 });
+
+// 8 人局：狼人 p1~p3 一起刀 target，接著輪到女巫 p5
+const wolvesKill = (target: string, s: GameState = started(8).state) =>
+  run(['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target }) as Action), s);
+const witchPrompt = (events: GameEvent[]) => prompts(events, 'witch')[0];
+const values = (p: { options: { value: string }[] }) => p.options.map((o) => o.value);
+
+describe('night-phase: 女巫用藥', () => {
+  it('狼人決定後，女巫收到刀口和用藥選項', () => {
+    const p = witchPrompt(wolvesKill('p7').events);
+    expect(p).toMatchObject({ audience: 'user', user: 'p5', text: expect.stringContaining('<@p7>') });
+    expect(values(p)).toEqual(expect.arrayContaining(['save', 'poison:p1', 'skip']));
+    expect(values(p)).not.toContain('poison:p5');
+  });
+
+  it('沒有擊殺目標時告訴女巫今晚沒有人被殺，也沒有解藥選項', () => {
+    const { state, events } = started(8);
+    const after = run([{ type: 'timeout', id: timerIds(events)[0] }], state);
+    const p = witchPrompt(after.events);
+    expect(p.text).toContain('沒有人被殺');
+    expect(values(p)).not.toContain('save');
+  });
+
+  it('用解藥救人：解藥變成已使用', () => {
+    const { state } = run([{ type: 'witchAct', user: 'p5', choice: 'save' }], wolvesKill('p7').state);
+    expect(state.night!.saved).toBe(true);
+    expect(state.potions.antidote).toBe(false);
+  });
+
+  it('用毒藥：毒藥變成已使用', () => {
+    const { state } = run([{ type: 'witchAct', user: 'p5', choice: 'poison:p1' }], wolvesKill('p7').state);
+    expect(state.night!.poisoned).toBe('p1');
+    expect(state.potions.poison).toBe(false);
+  });
+
+  it('同一晚用了解藥就不能再下毒', () => {
+    const { state } = run([{ type: 'witchAct', user: 'p5', choice: 'save' }], wolvesKill('p7').state);
+    const after = run([{ type: 'witchAct', user: 'p5', choice: 'poison:p1' }], state);
+    expect(after.state.night!.poisoned).toBeFalsy();
+    expect(after.state.potions.poison).toBe(true);
+  });
+
+  it('第一夜可以自救', () => {
+    const { state } = run([{ type: 'witchAct', user: 'p5', choice: 'save' }], wolvesKill('p5').state);
+    expect(state.night!.saved).toBe(true);
+  });
+
+  it('第二夜以後不能自救：告訴她刀口是自己，但沒有解藥選項', () => {
+    const night2 = { ...started(8).state, day: 2 };
+    const { state, events } = wolvesKill('p5', night2);
+    const p = witchPrompt(events);
+    expect(p.text).toContain('<@p5>');
+    expect(values(p)).not.toContain('save');
+    expect(run([{ type: 'witchAct', user: 'p5', choice: 'save' }], state).state.night!.saved).toBeFalsy();
+  });
+
+  it('解藥用過之後看不到刀口', () => {
+    const used = { ...started(8).state, potions: { antidote: false, poison: true } };
+    const p = witchPrompt(wolvesKill('p7', used).events);
+    expect(p.text).not.toContain('<@p7>');
+    expect(values(p)).not.toContain('save');
+  });
+
+  it('超時就當作不使用', () => {
+    const { state, events } = wolvesKill('p7');
+    const witchTimer = timerIds(events).at(-1)!;
+    const after = run([{ type: 'timeout', id: witchTimer }], state).state;
+    expect(after.night!.witchDone).toBe(true);
+    expect(after.potions).toEqual({ antidote: true, poison: true });
+  });
+});

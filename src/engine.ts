@@ -48,6 +48,9 @@ export interface NightState {
   wolfVotes: Record<string, string>;
   wolfTarget?: string | null; // undefined = 還沒決定，null = 沒有擊殺目標
   seerDone: boolean;
+  witchDone: boolean;
+  saved: boolean;
+  poisoned: string | null;
 }
 
 type TimerName = 'wolves' | 'witch';
@@ -61,6 +64,7 @@ export interface GameState {
   timerSeq: number;
   timers: Partial<Record<TimerName, number>>;
   night?: NightState;
+  potions: { antidote: boolean; poison: boolean };
 }
 
 export type Action =
@@ -71,6 +75,7 @@ export type Action =
   | { type: 'cancel'; user: string }
   | { type: 'wolfVote'; user: string; target: string }
   | { type: 'seerCheck'; user: string; target: string }
+  | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -161,7 +166,7 @@ function enterNight(c: Ctx) {
   s.day += 1;
   s.timers = {};
   const seer = aliveWith(s, 'seer')[0];
-  s.night = { wolfVotes: {}, seerDone: !seer };
+  s.night = { wolfVotes: {}, seerDone: !seer, witchDone: false, saved: false, poisoned: null };
   const living = alive(s).map((p) => p.id);
   c.events.push(
     { type: 'announce', text: `第 ${s.day} 夜，天黑請閉眼。` },
@@ -186,6 +191,33 @@ function decideWolves(c: Ctx) {
   const text = n.wolfTarget ? `今晚的目標是 ${mention(n.wolfTarget)}。` : '今晚沒有擊殺目標。';
   c.events.push({ type: 'wolfChat', wolves: wolfIds(c.s), text });
   startTimer(c, 'witch', ACTION_MS);
+  promptWitch(c);
+}
+
+// 女巫能不能對今晚的刀口用解藥：解藥還在、有刀口，而且不是第二夜以後自救
+function canSave(s: GameState, witch: string) {
+  const target = s.night!.wolfTarget;
+  return s.potions.antidote && !!target && (target !== witch || s.day === 1);
+}
+
+function promptWitch(c: Ctx) {
+  const s = c.s;
+  const witch = aliveWith(s, 'witch')[0];
+  if (!witch) {
+    s.night!.witchDone = true;
+    return;
+  }
+  const target = s.night!.wolfTarget;
+  const lines: string[] = [];
+  if (s.potions.antidote) lines.push(target ? `今晚被殺的是 ${mention(target)}。` : '今晚沒有人被殺。');
+  lines.push('一晚最多使用一瓶藥。');
+  const opts: Option[] = [];
+  if (canSave(s, witch.id)) opts.push({ value: 'save', label: '使用解藥' });
+  if (s.potions.poison) {
+    for (const p of alive(s)) if (p.id !== witch.id) opts.push({ value: `poison:${p.id}`, label: p.id });
+  }
+  opts.push({ value: 'skip', label: '不使用' });
+  c.events.push({ type: 'prompt', kind: 'witch', audience: 'user', user: witch.id, text: lines.join('\n'), options: opts });
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -255,12 +287,36 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
     }
+    case 'witchAct': {
+      const n = s.night;
+      if (s.phase !== 'night' || !n || n.wolfTarget === undefined || n.witchDone) return false;
+      if (!aliveWith(s, 'witch').some((p) => p.id === action.user)) return false;
+      if (action.choice === 'save') {
+        if (!canSave(s, action.user)) return false;
+        n.saved = true;
+        s.potions.antidote = false;
+      } else if (action.choice.startsWith('poison:')) {
+        const target = action.choice.slice('poison:'.length);
+        if (!s.potions.poison || target === action.user || !isAlive(s, target)) return false;
+        n.poisoned = target;
+        s.potions.poison = false;
+      } else if (action.choice !== 'skip') {
+        return false;
+      }
+      n.witchDone = true;
+      return true;
+    }
     case 'timeout': {
       const n = s.night;
       if (action.id === s.timers.wolves && n) {
         delete s.timers.wolves;
         n.seerDone = true;
         if (n.wolfTarget === undefined) decideWolves(c);
+        return true;
+      }
+      if (action.id === s.timers.witch && n) {
+        delete s.timers.witch;
+        n.witchDone = true;
         return true;
       }
       return false;
@@ -281,6 +337,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       day: 0,
       timerSeq: 0,
       timers: {},
+      potions: { antidote: true, poison: true },
     };
     return { state: created, events: [lobbyEvent(created)] };
   }
