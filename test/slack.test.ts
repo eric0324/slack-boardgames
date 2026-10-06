@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
+import { StatsStore } from '../src/stats.js';
 import { buttonAction, GameHost, parseCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
@@ -327,5 +328,57 @@ describe('Slack：再來一局', () => {
 describe('Slack：騎士決鬥', () => {
   it('決鬥按鈕轉成 duel action', () => {
     expect(buttonAction('duel', 'U2', 'U7', 'C1')).toEqual({ type: 'duel', user: 'U7', target: 'U2' });
+  });
+});
+
+describe('Slack：戰績查詢', () => {
+  async function statsHost() {
+    const { client, calls } = fakeClient();
+    const stats = new StatsStore(':memory:');
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: () => {}, gifs: {}, stats });
+    return { host, calls, stats };
+  }
+  const lastEphemeral = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/werewolf stats 查自己，只有自己看得到', async () => {
+    const { host, calls, stats } = await statsHost();
+    stats.record('C1', 'good', [{ id: 'U1', role: 'seer' }]);
+    await host.command('C1', 'U1', 'alice', 'stats');
+    expect(lastEphemeral(calls)).toMatchObject({ channel: 'C1', user: 'U1', text: expect.stringContaining('總計：1 場 1 勝（100%）') });
+  });
+
+  it('/werewolf stats @某人 查別人（支援有名字和沒名字的 mention 格式）', async () => {
+    const { host, calls, stats } = await statsHost();
+    stats.record('C1', 'wolves', [{ id: 'U2', role: 'werewolf' }]);
+    for (const text of ['stats <@U2|bob>', 'stats <@U2>']) {
+      await host.command('C1', 'U1', 'alice', text);
+      expect(lastEphemeral(calls)).toMatchObject({ user: 'U1', text: expect.stringContaining('📊 <@U2> 在這個頻道的戰績') });
+    }
+  });
+
+  it('不是 mention 時提示要用 @ 選擇玩家', async () => {
+    const { host, calls } = await statsHost();
+    await host.command('C1', 'U1', 'alice', 'stats bob');
+    expect(lastEphemeral(calls).text).toContain('@');
+  });
+
+  it('全真人的遊戲結束時存進戰績', async () => {
+    const { host, stats } = await statsHost();
+    await host.command('C1', 'U1', 'alice', 'new');
+    for (const u of ['U2', 'U3', 'U4', 'U5', 'U6']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.command('C1', 'U1', 'alice', 'start');
+    // U1、U2 狼人，U3 預言家，U4 女巫。預言家先死，今晚刀女巫 → 狼人獲勝
+    const s = host.games.get('C1')!;
+    host.games.set('C1', {
+      ...s,
+      players: s.players.map((p) => (p.id === 'U3' ? { ...p, alive: false } : p)),
+      night: { ...s.night!, seerDone: true },
+    });
+    await host.dispatch('C1', { type: 'wolfVote', user: 'U1', target: 'U4' });
+    await host.dispatch('C1', { type: 'wolfVote', user: 'U2', target: 'U4' });
+    await host.dispatch('C1', { type: 'witchAct', user: 'U4', choice: 'skip' });
+    expect(host.games.get('C1')!.phase).toBe('ended');
+    expect(stats.stats('C1', 'U1')!.total).toEqual({ games: 1, wins: 1 });
+    expect(stats.stats('C1', 'U3')!.total).toEqual({ games: 1, wins: 0 });
   });
 });

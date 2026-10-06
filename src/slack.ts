@@ -1,6 +1,7 @@
 // Slack adapter：把 slash command 和按鈕轉成 engine action，再把 engine event 轉成 Slack API 呼叫。
 import { applyAction, isBot, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
 import { GIFS } from './gifs.js';
+import { formatStats, type StatsStore } from './stats.js';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -17,10 +18,11 @@ export interface SlackClient {
 export interface HostOptions {
   rng?: Rng;
   gifs?: Partial<Record<GifKey, string[]>>;
+  stats?: StatsStore;
   setTimer?: (fn: () => void, ms: number) => void;
 }
 
-const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf next` 跳過目前的發言者、`/werewolf vote` 直接進入投票、`/werewolf cancel` 取消遊戲';
+const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf next` 跳過目前的發言者、`/werewolf vote` 直接進入投票、`/werewolf cancel` 取消遊戲、`/werewolf stats [@某人]` 查詢戰績';
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {
   const [sub, arg, ...rest] = text.trim().split(/\s+/);
@@ -89,6 +91,7 @@ export class GameHost {
   private queue: Promise<void> = Promise.resolve();
   private rng: Rng;
   private gifs: Partial<Record<GifKey, string[]>>;
+  private stats?: StatsStore;
   private setTimer: (fn: () => void, ms: number) => void;
 
   constructor(
@@ -97,6 +100,7 @@ export class GameHost {
   ) {
     this.rng = opts.rng ?? Math.random;
     this.gifs = opts.gifs ?? GIFS;
+    this.stats = opts.stats;
     this.setTimer = opts.setTimer ?? ((fn, ms) => void setTimeout(fn, ms));
   }
 
@@ -107,6 +111,8 @@ export class GameHost {
 
   command(channel: string, user: string, userName: string, text: string): Promise<void> {
     this.names.set(user, userName);
+    const [sub, ...args] = text.trim().split(/\s+/);
+    if (sub === 'stats') return this.showStats(channel, user, args.join(' '));
     const action = parseCommand(text, user, channel);
     if (!action) return this.deliver(channel, [{ type: 'ephemeral', to: user, text: HELP }]);
     return this.dispatch(channel, action);
@@ -119,6 +125,15 @@ export class GameHost {
     const channel = value.slice(0, sep);
     const action = buttonAction(kind, value.slice(sep + 1), user, channel);
     return action ? this.dispatch(channel, action) : Promise.resolve();
+  }
+
+  // `/werewolf stats [@某人]`：開啟 should_escape 後，mention 會是 <@U123> 或 <@U123|名字>
+  private showStats(channel: string, user: string, arg: string): Promise<void> {
+    const target = arg ? /^<@([A-Z0-9]+)(\|[^>]*)?>$/.exec(arg)?.[1] : user;
+    const text = target
+      ? formatStats(mention(target), this.stats?.stats(channel, target) ?? null)
+      : '請用 @ 選擇要查詢的玩家，例如 `/werewolf stats @某人`。';
+    return this.deliver(channel, [{ type: 'ephemeral', to: user, text }]);
   }
 
   dispatch(channel: string, action: Action): Promise<void> {
@@ -171,6 +186,9 @@ export class GameHost {
   private async send(channel: string, e: GameEvent) {
     const chat = this.client.chat;
     switch (e.type) {
+      case 'gameRecord':
+        this.stats?.record(channel, e.winner, e.players);
+        return;
       case 'startTimer':
         this.setTimer(() => void this.dispatch(channel, { type: 'timeout', id: e.id }), e.ms);
         return;

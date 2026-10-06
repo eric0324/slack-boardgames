@@ -1586,3 +1586,42 @@ describe('day-phase: 狼王開槍', () => {
     expect(done.state).toMatchObject({ phase: 'night', day: 2 });
   });
 });
+
+describe('player-stats: 記錄遊戲結果（engine）', () => {
+  const record = (events: GameEvent[]) => events.find((e) => e.type === 'gameRecord');
+
+  it('全真人的遊戲分出勝負時送出紀錄：獲勝陣營和每位玩家的角色', () => {
+    const r = record(wolvesWinTonight().events);
+    expect(r).toEqual({
+      type: 'gameRecord',
+      winner: 'wolves',
+      players: [
+        { id: 'p1', role: 'werewolf' },
+        { id: 'p2', role: 'werewolf' },
+        { id: 'p3', role: 'seer' },
+        { id: 'p4', role: 'witch' },
+        { id: 'p5', role: 'villager' },
+        { id: 'p6', role: 'villager' },
+      ],
+    });
+  });
+
+  it('有 bot 的遊戲不送紀錄', () => {
+    for (let seed = 1; seed <= 3; seed++) {
+      let x = seed;
+      const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+      let s = applyAction(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyAction(s, { type: 'addBot', user: 'p1', count: 5 }, r).state;
+      let last = applyAction(s, { type: 'start', user: 'p1' }, r);
+      for (let step = 0; step < 300 && last.state.phase !== 'ended'; step++) {
+        last = applyAction(last.state, { type: 'timeout', id: Object.values(last.state.timers)[0]! }, r);
+      }
+      expect(last.state.phase).toBe('ended');
+      expect(record(last.events)).toBeUndefined();
+    }
+  });
+
+  it('取消的遊戲不送紀錄', () => {
+    expect(record(run([{ type: 'cancel', user: 'p1' }], started(6).state).events)).toBeUndefined();
+  });
+});

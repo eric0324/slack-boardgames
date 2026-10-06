@@ -18,8 +18,8 @@
      slash_commands:
        - command: /werewolf
          description: 狼人殺
-         usage_hint: new | addbot [n] | removebot [n] | start | next | vote | cancel
-         should_escape: false
+         usage_hint: new | addbot [n] | removebot [n] | start | next | vote | cancel | stats [@someone]
+         should_escape: true
    oauth_config:
      scopes:
        bot:
@@ -49,5 +49,7 @@ npm install
 npm start      # 用 Socket Mode 連上 Slack，不需要公開 URL
 npm test       # 執行測試
 ```
+
+戰績會存在 `data/stats.db`（SQLite），可以用環境變數 `STATS_DB` 改位置；換電腦跑 bot 時記得一起搬過去。
 
 最後把 bot 邀請進要玩的頻道（`/invite @werewolf`），輸入 `/werewolf new` 就能開房。
