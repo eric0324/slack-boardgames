@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -40,6 +40,7 @@ export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<
 
 export const ACTION_MS = 60_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間
+export const LAST_WORDS_MS = 30_000;
 export const DISCUSSION_MS = 2 * 60_000; // 輪流發言後的自由討論
 
 export interface Player {
@@ -71,7 +72,9 @@ export interface GameState {
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
   speakers: string[]; // 還沒輪到的發言者
-  speaker?: string; // 目前的發言者
+  speaker?: string; // 目前的發言者（輪流發言或遺言）
+  lastWords: string[]; // 還沒講遺言的死者
+  afterLastWords?: { kind: 'dawn' } | { kind: 'exile'; id: string }; // 遺言講完後要接什麼
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
@@ -333,7 +336,45 @@ function dawn(c: Ctx) {
     : '☀️ 天亮了。昨晚是平安夜。';
   c.events.push({ type: 'announce', text, gif: deaths.length ? 'dawnDeath' : 'dawnPeace' });
   if (checkGameOver(c)) return;
-  const n = c.s.night!;
+  startLastWords(c, c.s.day === 1 ? deaths : [], { kind: 'dawn' });
+}
+
+// 遺言：第一夜死者和被放逐者才有
+function startLastWords(c: Ctx, ids: string[], after: NonNullable<GameState['afterLastWords']>) {
+  c.s.phase = 'lastWords';
+  c.s.lastWords = [...ids];
+  c.s.afterLastWords = after;
+  nextLastWords(c);
+}
+
+function nextLastWords(c: Ctx) {
+  const s = c.s;
+  s.timers = {};
+  for (let id = s.lastWords.shift(); id; id = s.lastWords.shift()) {
+    s.speaker = id;
+    if (isBot(id)) {
+      c.events.push({ type: 'announce', text: `${mention(id)}：（沒有遺言）` });
+      continue;
+    }
+    c.events.push({
+      type: 'prompt',
+      kind: 'endSpeech',
+      audience: 'channel',
+      text: `🕯️ ${mention(id)} 的遺言（${LAST_WORDS_MS / 1000} 秒）`,
+      options: [{ value: id, label: '結束發言' }],
+    });
+    startTimer(c, 'phase', LAST_WORDS_MS);
+    return;
+  }
+  s.speaker = undefined;
+  const after = s.afterLastWords!;
+  s.afterLastWords = undefined;
+  if (after.kind === 'exile') {
+    if (player(s, after.id).role === 'hunter') startHunter(c, after.id, 'night');
+    else enterNight(c);
+    return;
+  }
+  const n = s.night!;
   const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
   const hunter = c.s.players.find((p) => p.id === shotByWolves && p.role === 'hunter');
   if (hunter) startHunter(c, hunter.id, 'speech');
@@ -467,8 +508,7 @@ function exile(c: Ctx, id: string) {
   player(c.s, id).alive = false;
   c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 被放逐了。`, gif: 'exile' });
   if (checkGameOver(c)) return;
-  if (player(c.s, id).role === 'hunter') startHunter(c, id, 'night');
-  else enterNight(c);
+  startLastWords(c, [id], { kind: 'exile', id });
 }
 
 // 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true
@@ -484,6 +524,9 @@ function checkGameOver(c: Ctx): boolean {
   c.events.push({ type: 'announce', text: `${title}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' });
   return true;
 }
+
+const isSpeaking = (s: GameState) => s.phase === 'speech' || s.phase === 'pkSpeech' || s.phase === 'lastWords';
+const advanceSpeaker = (c: Ctx) => (c.s.phase === 'lastWords' ? nextLastWords(c) : nextSpeaker(c));
 
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
@@ -606,15 +649,15 @@ function handle(c: Ctx, action: GameAction): boolean {
       return true;
     }
     case 'endSpeech': {
-      if (s.phase !== 'speech' && s.phase !== 'pkSpeech') return false;
+      if (!isSpeaking(s)) return false;
       if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
-      nextSpeaker(c);
+      advanceSpeaker(c);
       return true;
     }
     case 'skipSpeaker': {
-      if (s.phase !== 'speech' && s.phase !== 'pkSpeech') return false;
+      if (!isSpeaking(s)) return false;
       if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過發言者。');
-      nextSpeaker(c);
+      advanceSpeaker(c);
       return true;
     }
     case 'dayVote': {
@@ -654,8 +697,8 @@ function handle(c: Ctx, action: GameAction): boolean {
         startVote(c);
         return true;
       }
-      if (action.id === s.timers.phase && (s.phase === 'speech' || s.phase === 'pkSpeech')) {
-        nextSpeaker(c);
+      if (action.id === s.timers.phase && isSpeaking(s)) {
+        advanceSpeaker(c);
         return true;
       }
       if (action.id === s.timers.phase && (s.phase === 'vote' || s.phase === 'pkVote')) {
@@ -687,6 +730,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       potions: { antidote: true, poison: true },
       lastDeaths: [],
       speakers: [],
+      lastWords: [],
       votes: {},
       candidates: [],
       voters: [],

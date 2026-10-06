@@ -142,6 +142,7 @@ describe('Slack：event 轉換', () => {
       { type: 'wolfVote', user: 'U2', target: 'U5' },
       { type: 'seerCheck', user: 'U3', target: 'U1' },
       { type: 'witchAct', user: 'U4', choice: 'skip' },
+      { type: 'skipSpeaker', user: 'U1' },
       { type: 'endDiscussion', user: 'U1' },
     ] as const) {
       await host.dispatch('C1', a);
