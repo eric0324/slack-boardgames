@@ -34,7 +34,9 @@ const ROLE_HELP: Record<Role, string> = {
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
 
-export const mention = (id: string) => `<@${id}>`;
+// bot 玩家的 id 是 `bot:<編號>`，沒有 Slack 帳號，所以不能用 <@id>
+export const isBot = (id: string) => id.startsWith('bot:');
+export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<@${id}>`);
 
 export const ACTION_MS = 60_000;
 export const DISCUSSION_MS = 5 * 60_000;
@@ -82,6 +84,8 @@ export type Action =
   | { type: 'leave'; user: string }
   | { type: 'start'; user: string }
   | { type: 'cancel'; user: string }
+  | { type: 'addBot'; user: string; count: number }
+  | { type: 'removeBot'; user: string; count: number }
   | { type: 'wolfVote'; user: string; target: string }
   | { type: 'seerCheck'; user: string; target: string }
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
@@ -431,6 +435,26 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       c.events.push(lobbyEvent(s));
       announceStart(c);
       enterNight(c);
+      return true;
+    }
+    case 'addBot': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以加入 bot。');
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
+      const room = MAX_PLAYERS - s.players.length;
+      const bots = s.players.filter((p) => isBot(p.id)).length;
+      for (let i = 1; i <= Math.min(action.count, room); i++) s.players.push({ id: `bot:${bots + i}`, alive: true });
+      if (room > 0) c.events.push(lobbyEvent(s));
+      if (action.count > room) reply(c, action.user, '房間已滿。');
+      return room > 0;
+    }
+    case 'removeBot': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以移除 bot。');
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
+      const bots = s.players.filter((p) => isBot(p.id));
+      if (!bots.length) return reply(c, action.user, '房間裡沒有 bot。');
+      const removed = new Set(bots.slice(-action.count).map((p) => p.id));
+      s.players = s.players.filter((p) => !removed.has(p.id));
+      c.events.push(lobbyEvent(s));
       return true;
     }
     case 'cancel': {

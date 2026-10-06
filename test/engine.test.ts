@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, checkWinner, dealRoles, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
+import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
 
@@ -881,5 +881,68 @@ describe('按鈕確認訊息', () => {
     const { events } = run([{ type: 'hunterShoot', user: 'p6', target: 'none' }], fullNight('p6', 'skip').state);
     expect(events).toContainEqual({ type: 'dm', to: 'p6', text: '你選擇不開槍。' });
     expect(announces(events).some((t) => t.includes('開槍'))).toBe(false);
+  });
+});
+
+const ids = (s: GameState) => s.players.map((p) => p.id);
+
+describe('bot-players: 加入與移除 bot', () => {
+  it('加入多個 bot，房間公告跟著更新', () => {
+    const { state, events } = run([{ type: 'addBot', user: 'p1', count: 5 }], lobbyWith(1).state);
+    expect(ids(state)).toEqual(['p1', 'bot:1', 'bot:2', 'bot:3', 'bot:4', 'bot:5']);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', players: ids(state) }));
+  });
+
+  it('加入 bot 超過上限：只加到 12 人，提示房主房間已滿', () => {
+    const { state, events } = run([{ type: 'addBot', user: 'p1', count: 5 }], lobbyWith(10).state);
+    expect(state.players).toHaveLength(12);
+    expect(ephemeralTo(events, 'p1')).toMatchObject({ text: expect.stringContaining('房間已滿') });
+  });
+
+  it('移除 bot：從最後加入的開始移除', () => {
+    const three = run([{ type: 'addBot', user: 'p1', count: 3 }], lobbyWith(1).state).state;
+    const { state } = run([{ type: 'removeBot', user: 'p1', count: 2 }], three);
+    expect(ids(state)).toEqual(['p1', 'bot:1']);
+  });
+
+  it('移除後再加入，編號接續', () => {
+    const s = run(
+      [
+        { type: 'addBot', user: 'p1', count: 3 },
+        { type: 'removeBot', user: 'p1', count: 2 },
+        { type: 'addBot', user: 'p1', count: 1 },
+      ],
+      lobbyWith(1).state,
+    ).state;
+    expect(ids(s)).toEqual(['p1', 'bot:1', 'bot:2']);
+  });
+
+  it('沒有 bot 可以移除', () => {
+    const { state, events } = run([{ type: 'removeBot', user: 'p1', count: 1 }], lobbyWith(2).state);
+    expect(state.players).toHaveLength(2);
+    expect(ephemeralTo(events, 'p1')).toMatchObject({ text: expect.stringContaining('沒有 bot') });
+  });
+
+  it('非房主或遊戲已經開始時拒絕', () => {
+    const lobby = lobbyWith(2).state;
+    const a = run([{ type: 'addBot', user: 'p2', count: 1 }], lobby);
+    expect(a.state.players).toHaveLength(2);
+    expect(ephemeralTo(a.events, 'p2')).toBeDefined();
+
+    const game = started(6).state;
+    for (const type of ['addBot', 'removeBot'] as const) {
+      const b = run([{ type, user: 'p1', count: 1 }], game);
+      expect(b.state.players).toHaveLength(6);
+      expect(ephemeralTo(b.events, 'p1')).toBeDefined();
+    }
+  });
+});
+
+describe('bot-players: bot 的顯示方式', () => {
+  it('bot 顯示成 🤖Bot<編號>，真人還是 <@id>', () => {
+    expect(mention('bot:1')).toBe('🤖Bot1');
+    expect(mention('U123')).toBe('<@U123>');
+    expect(isBot('bot:3')).toBe(true);
+    expect(isBot('U123')).toBe(false);
   });
 });
