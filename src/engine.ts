@@ -70,6 +70,7 @@ export type Action =
   | { type: 'start'; user: string }
   | { type: 'cancel'; user: string }
   | { type: 'wolfVote'; user: string; target: string }
+  | { type: 'seerCheck'; user: string; target: string }
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -241,6 +242,17 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user) || !isAlive(s, action.target)) return false;
       n.wolfVotes[action.user] = action.target;
       if (aliveWith(s, 'werewolf').every((w) => n.wolfVotes[w.id])) decideWolves(c);
+      return true;
+    }
+    case 'seerCheck': {
+      const n = s.night;
+      if (s.phase !== 'night' || !n || n.seerDone) return false;
+      if (!aliveWith(s, 'seer').some((p) => p.id === action.user)) return false;
+      if (action.target === action.user || !isAlive(s, action.target)) return false;
+      n.seerDone = true;
+      const target = s.players.find((p) => p.id === action.target)!;
+      const side = target.role === 'werewolf' ? '狼人' : '好人';
+      c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
     }
     case 'timeout': {

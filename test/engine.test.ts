@@ -290,3 +290,33 @@ describe('night-phase: 狼人擊殺', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('night-phase: 預言家查驗', () => {
+  it('查到狼人', () => {
+    const { events } = run([{ type: 'seerCheck', user: 'p4', target: 'p1' }], started(8).state);
+    expect(events).toContainEqual({ type: 'dm', to: 'p4', text: '<@p1> 是狼人。' });
+  });
+
+  it('查到好人，不透露具體角色', () => {
+    const { events } = run([{ type: 'seerCheck', user: 'p4', target: 'p5' }], started(8).state);
+    expect(events).toContainEqual({ type: 'dm', to: 'p4', text: '<@p5> 是好人。' });
+  });
+
+  it('同一晚重複查驗會被忽略', () => {
+    const { state } = run([{ type: 'seerCheck', user: 'p4', target: 'p5' }], started(8).state);
+    expect(run([{ type: 'seerCheck', user: 'p4', target: 'p1' }], state).events).toEqual([]);
+  });
+
+  it('超時就放棄當晚的查驗', () => {
+    const { state, events } = started(8);
+    const [id] = timerIds(events);
+    const after = run([{ type: 'timeout', id }], state).state;
+    expect(run([{ type: 'seerCheck', user: 'p4', target: 'p1' }], after).events).toEqual([]);
+  });
+
+  it('不是預言家或查驗自己都會被忽略', () => {
+    const { state } = started(8);
+    expect(run([{ type: 'seerCheck', user: 'p7', target: 'p1' }], state).events).toEqual([]);
+    expect(run([{ type: 'seerCheck', user: 'p4', target: 'p4' }], state).events).toEqual([]);
+  });
+});
