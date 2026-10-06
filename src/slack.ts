@@ -160,7 +160,7 @@ export class GameHost {
       .then(async () => {
         for (const e of events) await this.send(channel, e);
       })
-      .catch((err) => console.error('[werewolf] Slack API 錯誤', err));
+      .catch((err) => console.error('[werewolf] Slack API error', err));
     return this.queue;
   }
 
