@@ -1712,3 +1712,23 @@ describe('bot-players: bot 的發言台詞', () => {
     }
   });
 });
+
+describe('announcement-gifs: 決鬥、PK、狼王開槍的 GIF', () => {
+  it('騎士決鬥成功和失敗用不同的 GIF', () => {
+    const win = run([{ type: 'duel', user: 'p7', target: 'p1' }], day9().state);
+    expect(announceWith(win.events, '是狼人，出局')).toMatchObject({ gif: 'duelWin' });
+    const lose = run([{ type: 'duel', user: 'p7', target: 'p4' }], day9().state);
+    expect(announceWith(lose.events, '出局')).toMatchObject({ gif: 'duelLose' });
+  });
+
+  it('平票 PK 有 GIF', () => {
+    expect(announceWith(tied().events, 'PK')).toMatchObject({ gif: 'pk' });
+  });
+
+  it('狼王開槍和獵人開槍用不同的 GIF', () => {
+    const shot = run([{ type: 'hunterShoot', user: 'p3', target: 'p9' }], kingExiled().state);
+    expect(announceWith(shot.events, '狼王')).toMatchObject({ gif: 'wolfKingShot' });
+    const hunter = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], dawned('p6', 'skip').state);
+    expect(announceWith(hunter.events, '獵人')).toMatchObject({ gif: 'hunterShot' });
+  });
+});

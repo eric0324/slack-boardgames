@@ -123,5 +123,5 @@
 
 ## 24. 更多公告 GIF
 
-- [ ] 24.1 Engine：騎士決鬥結果（成功／失敗）、平票 PK、狼王開槍的公告加上對應的 `gif` key；確認 announcement-gifs 新增的 scenarios 測試通過
-- [ ] 24.2 從 Giphy 挑選這四個時刻的 GIF，確認網址讀得到、內容合適，加進 `src/gifs.ts`；確認預設設定檔每個時刻都有 GIF 的測試通過
+- [x] 24.1 Engine：騎士決鬥結果（成功／失敗）、平票 PK、狼王開槍的公告加上對應的 `gif` key；確認 announcement-gifs 新增的 scenarios 測試通過
+- [x] 24.2 從 Giphy 挑選這四個時刻的 GIF，並把所有時刻擴充到每個至少 6 張，確認網址讀得到、檔案不超過 2.5MB、內容合適，加進 `src/gifs.ts`；確認預設設定檔每個時刻至少 6 張且不重複的測試通過

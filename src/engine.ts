@@ -130,7 +130,19 @@ export type GameEvent =
 export type Rng = () => number;
 
 // 公告要搭配哪一種 GIF，實際網址由 adapter 的設定檔決定
-export type GifKey = 'start' | 'night' | 'dawnDeath' | 'dawnPeace' | 'exile' | 'hunterShot' | 'goodWin' | 'wolvesWin';
+export type GifKey =
+  | 'start'
+  | 'night'
+  | 'dawnDeath'
+  | 'dawnPeace'
+  | 'exile'
+  | 'hunterShot'
+  | 'wolfKingShot'
+  | 'pk'
+  | 'duelWin'
+  | 'duelLose'
+  | 'goodWin'
+  | 'wolvesWin';
 
 interface Result {
   state: GameState;
@@ -445,8 +457,9 @@ function finishShooter(c: Ctx, target: string) {
   s.shooter = undefined;
   if (target !== 'none') {
     player(s, target).alive = false;
-    const who = ROLE_NAME[player(s, id).role!];
-    c.events.push({ type: 'announce', text: `🔫 ${who} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
+    const role = player(s, id).role!;
+    const gif = role === 'wolfKing' ? 'wolfKingShot' : 'hunterShot';
+    c.events.push({ type: 'announce', text: `🔫 ${ROLE_NAME[role]} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif });
     if (checkGameOver(c)) return;
     // 被帶走的人如果是狼王，輪到他開槍（連鎖）
     if (canShoot(s, target, 'shot')) {
@@ -502,14 +515,14 @@ function duel(c: Ctx, knight: string, target: string) {
   c.events.push({ type: 'announce', text: `🗡️ 騎士 ${mention(knight)} 翻牌，向 ${mention(target)} 發起決鬥！` });
   if (isWolf(player(s, target).role)) {
     player(s, target).alive = false;
-    c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。` });
+    c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。`, gif: 'duelWin' });
     if (checkGameOver(c)) return;
     if (canShoot(s, target, 'duel')) startShooter(c, target, 'night');
     else enterNight(c);
     return;
   }
   player(s, knight).alive = false;
-  c.events.push({ type: 'announce', text: `${mention(target)} 是好人，騎士 ${mention(knight)} 出局。` });
+  c.events.push({ type: 'announce', text: `${mention(target)} 是好人，騎士 ${mention(knight)} 出局。`, gif: 'duelLose' });
   if (checkGameOver(c)) return;
   s.speakers = s.speakers.filter((id) => id !== knight);
   if (s.phase === 'speech' && s.speaker === knight) nextSpeaker(c);
@@ -574,7 +587,7 @@ function startPk(c: Ctx, tied: string[]) {
   s.phase = 'pkSpeech';
   s.candidates = tied;
   s.speakers = s.players.map((p) => p.id).filter((id) => tied.includes(id));
-  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序再發言一次。` });
+  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序再發言一次。`, gif: 'pk' });
   nextSpeaker(c);
 }
 
