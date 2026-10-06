@@ -62,3 +62,34 @@
 
 - [x] 11.1 Engine 的 `announce` event 加上代表時刻的 `gif` 欄位（例如 `night`、`dawnDeath`、`dawnPeace`），公告開頭加上 emoji，開始公告提醒查看私訊；確認 announcement-gifs 中 emoji、提醒私訊，以及各時刻對應正確 `gif` 的測試通過
 - [x] 11.2 新增 `src/gifs.ts` 設定檔，從 Giphy 挑選每個時刻的初始 GIF（使用小尺寸版本的網址），並確認每個網址都讀得到；Slack adapter 把有 `gif` 的公告送成文字加 image block，隨機選一張，沒有設定時只送文字；用假的 Slack client 確認「多張 GIF 隨機選」「沒有設定 GIF」的 scenarios 測試通過，README 說明怎麼替換 GIF
+
+## 12. 輪流發言
+
+- [x] 12.1 Engine 用輪流發言取代自由討論：隨機起點、依加入順序、跳過死亡玩家、每人 40 秒、發言者結束或房主 `next` 跳過、bot 自動過、講完進入 2 分鐘自由討論再投票，PK 發言也改成輪流（PK 沒有自由討論）；確認 day-phase「輪流發言」和「PK 發言」的 scenarios 測試通過，並更新原本依賴 5 分鐘討論的測試
+- [x] 12.2 Slack adapter 支援「結束發言」按鈕和 `/werewolf next` 指令，更新 README 玩法說明和 manifest 的指令提示；用假的 Slack client 確認按鈕和指令會轉成正確的 action
+
+## 13. 遺言
+
+- [x] 13.1 Engine 加入遺言：第一夜死者（依死訊順序）和被放逐者有 30 秒遺言，可以結束發言或被房主跳過，bot 沒有遺言，勝負已定就不講，獵人先講遺言再開槍；確認 day-phase「遺言」的 scenarios 測試通過，並更新受影響的既有測試
+
+## 14. 狼人空刀
+
+- [x] 14.1 狼人擊殺選項加入「不殺人」（算一票、多數決、和玩家同票時隨機），狼人對話公布選擇和「今晚不殺人」，bot 狼人不選不殺人；確認 night-phase「狼人選擇不殺人」「不殺人得票最多」的 scenarios 測試通過
+
+## 15. 狼人倒數提醒
+
+- [x] 15.1 狼人時限剩 30 秒時，若還有存活狼人沒選，在狼人對話提醒並列出還沒選的狼人；全部選好就不提醒；確認 night-phase「剩 30 秒提醒還沒選的狼人」「狼人都選好了就不提醒」的 scenarios 測試通過
+
+## 16. 規則 wiki
+
+- [x] 16.1 開始公告附上 wiki「遊戲規則」頁面的連結；確認 announcement-gifs「開始公告附上規則連結」的 scenario 測試通過
+- [x] 16.2 依照目前的 specs 撰寫 GitHub wiki 的「遊戲規則」頁面和首頁，推送到 wiki repo，並確認連結打得開
+
+## 17. 不在遊戲中的人
+
+- [x] 17.1 不在玩家名單上的人按遊戲按鈕時忽略並回覆「你不在這局遊戲中」；確認 game-lobby「不在遊戲中的人不能參與」的 scenarios 測試通過
+
+## 18. 再來一局
+
+- [x] 18.1 Engine：遊戲分出勝負後送出「再來一局」按鈕，加入 `rematch` action（只有上一局的真人玩家、開空房間、已有房間時拒絕、取消的遊戲不能用）；確認 win-condition「再來一局」的 scenarios 測試通過
+- [x] 18.2 Slack adapter 把「再來一局」按鈕轉成 `rematch` action，並更新 wiki 的指令頁；用假的 Slack client 確認按鈕會開出新的房間公告

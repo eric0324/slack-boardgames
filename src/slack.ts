@@ -20,7 +20,7 @@ export interface HostOptions {
   setTimer?: (fn: () => void, ms: number) => void;
 }
 
-const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf vote` 結束討論進入投票、`/werewolf cancel` 取消遊戲';
+const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf next` 跳過目前的發言者、`/werewolf vote` 直接進入投票、`/werewolf cancel` 取消遊戲';
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {
   const [sub, arg, ...rest] = text.trim().split(/\s+/);
@@ -38,12 +38,14 @@ export function parseCommand(text: string, user: string, channel: string): Actio
       return { type: 'cancel', user };
     case 'vote':
       return { type: 'endDiscussion', user };
+    case 'next':
+      return { type: 'skipSpeaker', user };
     default:
       return null;
   }
 }
 
-export function buttonAction(kind: string, value: string, user: string): Action | null {
+export function buttonAction(kind: string, value: string, user: string, channel = ''): Action | null {
   switch (kind) {
     case 'join':
     case 'leave':
@@ -59,6 +61,10 @@ export function buttonAction(kind: string, value: string, user: string): Action 
       return { type: 'dayVote', user, target: value };
     case 'hunterShoot':
       return { type: 'hunterShoot', user, target: value };
+    case 'endSpeech':
+      return { type: 'endSpeech', user };
+    case 'rematch':
+      return { type: 'rematch', user, channel };
     default:
       return null;
   }
@@ -108,8 +114,9 @@ export class GameHost {
     this.names.set(user, userName);
     const kind = actionId.split(':')[1];
     const sep = value.indexOf('|');
-    const action = buttonAction(kind, value.slice(sep + 1), user);
-    return action ? this.dispatch(value.slice(0, sep), action) : Promise.resolve();
+    const channel = value.slice(0, sep);
+    const action = buttonAction(kind, value.slice(sep + 1), user, channel);
+    return action ? this.dispatch(channel, action) : Promise.resolve();
   }
 
   dispatch(channel: string, action: Action): Promise<void> {

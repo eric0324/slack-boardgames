@@ -142,6 +142,7 @@ describe('Slack：event 轉換', () => {
       { type: 'wolfVote', user: 'U2', target: 'U5' },
       { type: 'seerCheck', user: 'U3', target: 'U1' },
       { type: 'witchAct', user: 'U4', choice: 'skip' },
+      { type: 'skipSpeaker', user: 'U1' },
       { type: 'endDiscussion', user: 'U1' },
     ] as const) {
       await host.dispatch('C1', a);
@@ -182,8 +183,9 @@ describe('Slack：遊戲按鈕與計時', () => {
 
   it('startTimer 會設定計時，時間到送出 timeout', async () => {
     const { host, timers, calls } = await startedHost();
-    expect(timers.at(-1)!.ms).toBe(60_000);
-    timers.at(-1)!.fn();
+    const wolfTimer = timers.find((t) => t.ms === 60_000)!;
+    expect(wolfTimer).toBeDefined();
+    wolfTimer.fn();
     await host.idle();
     expect(postsTo(calls, 'D:U1,U2').map((c) => c.args.text)).toContainEqual(expect.stringContaining('沒有擊殺目標'));
   });
@@ -278,5 +280,46 @@ describe('Slack：公告 GIF', () => {
       expect(urls.length, k).toBeGreaterThan(0);
       for (const u of urls) expect(u).toMatch(/^https:\/\/media\.giphy\.com\/media\/\w+\/200\.gif$/);
     }
+  });
+});
+
+describe('Slack：輪流發言', () => {
+  it('/werewolf next 轉成跳過發言者', () => {
+    expect(parseCommand('next', 'U1', 'C1')).toEqual({ type: 'skipSpeaker', user: 'U1' });
+  });
+
+  it('「結束發言」按鈕轉成 endSpeech', () => {
+    expect(buttonAction('endSpeech', 'U3', 'U3')).toEqual({ type: 'endSpeech', user: 'U3' });
+  });
+});
+
+describe('Slack：再來一局', () => {
+  it('「再來一局」按鈕轉成 rematch action，帶著遊戲頻道', () => {
+    expect(buttonAction('rematch', 'rematch', 'U1', 'C1')).toEqual({ type: 'rematch', user: 'U1', channel: 'C1' });
+  });
+
+  it('遊戲結束後按「再來一局」，頻道出現新的房間公告', async () => {
+    const { client, calls } = fakeClient();
+    const timers: (() => void)[] = [];
+    // 固定值的 rng 會讓 bot 每次都平票、遊戲永遠不會結束，所以用有種子的 LCG
+    let seed = 7;
+    const rng = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const host = new GameHost(client, { rng, setTimer: (fn) => void timers.push(fn), gifs: {} });
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.command('C1', 'U1', 'alice', 'addbot 5');
+    await host.command('C1', 'U1', 'alice', 'start');
+    for (let i = 0; i < 500 && host.games.get('C1')!.phase !== 'ended'; i++) {
+      timers.shift()?.();
+      await host.idle();
+    }
+    expect(host.games.get('C1')!.phase).toBe('ended');
+    const rematch = calls.filter((c) => buttonsOf(c).some((b: any) => b.action_id.startsWith('ww:rematch')));
+    expect(rematch).toHaveLength(1);
+
+    await host.button('ww:rematch:0', 'C1|rematch', 'U1', 'alice');
+    expect(host.games.get('C1')).toMatchObject({ phase: 'lobby', host: 'U1' });
+    const lobby = calls.at(-1)!;
+    expect(lobby.method).toBe('chat.postMessage');
+    expect(buttonsOf(lobby).map((b: any) => b.action_id)).toEqual(['ww:join:0', 'ww:leave:1']);
   });
 });
