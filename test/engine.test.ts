@@ -391,3 +391,61 @@ describe('night-phase: 女巫用藥', () => {
     expect(after.potions).toEqual({ antidote: true, poison: true });
   });
 });
+
+// 8 人局一整晚：狼人刀 kill，預言家查 p1，女巫做 witch
+const fullNight = (kill: string, witch: string) =>
+  run(
+    [
+      ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: kill }) as Action),
+      { type: 'seerCheck', user: 'p4', target: 'p1' },
+      { type: 'witchAct', user: 'p5', choice: witch },
+    ],
+    started(8).state,
+  );
+const isDead = (s: GameState, id: string) => !s.players.find((p) => p.id === id)!.alive;
+
+describe('night-phase: 夜晚結算', () => {
+  it('所有人行動完就進入結算', () => {
+    const { state } = fullNight('p7', 'skip');
+    expect(state.phase).not.toBe('night');
+    expect(state.lastDeaths).toEqual(['p7']);
+  });
+
+  it('預言家還沒查驗時不會結算，等到預言家超時', () => {
+    const { state, events } = started(8);
+    const wolfTimer = timerIds(events)[0];
+    const s = run(
+      [
+        ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p7' }) as Action),
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      state,
+    ).state;
+    expect(s.phase).toBe('night');
+    expect(run([{ type: 'timeout', id: wolfTimer }], s).state.phase).not.toBe('night');
+  });
+
+  it('被刀又被救：沒有人死亡', () => {
+    const { state } = fullNight('p7', 'save');
+    expect(state.lastDeaths).toEqual([]);
+    expect(isDead(state, 'p7')).toBe(false);
+  });
+
+  it('有人被刀、另一人被毒：兩人都死亡', () => {
+    const { state } = fullNight('p7', 'poison:p8');
+    expect([...state.lastDeaths].sort()).toEqual(['p7', 'p8']);
+    expect(isDead(state, 'p7') && isDead(state, 'p8')).toBe(true);
+  });
+
+  it('沒有擊殺也沒有下毒：沒有人死亡', () => {
+    const { state, events } = started(8);
+    const after = run(
+      [
+        { type: 'timeout', id: timerIds(events)[0] },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      state,
+    ).state;
+    expect(after.lastDeaths).toEqual([]);
+  });
+});

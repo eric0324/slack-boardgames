@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'ended';
+export type Phase = 'lobby' | 'night' | 'day' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -65,6 +65,7 @@ export interface GameState {
   timers: Partial<Record<TimerName, number>>;
   night?: NightState;
   potions: { antidote: boolean; poison: boolean };
+  lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
 }
 
 export type Action =
@@ -220,6 +221,19 @@ function promptWitch(c: Ctx) {
   c.events.push({ type: 'prompt', kind: 'witch', audience: 'user', user: witch.id, text: lines.join('\n'), options: opts });
 }
 
+function maybeResolveNight(c: Ctx) {
+  const s = c.s;
+  const n = s.night;
+  if (s.phase !== 'night' || !n || n.wolfTarget === undefined || !n.seerDone || !n.witchDone) return;
+  const deaths = new Set<string>();
+  if (n.wolfTarget && !n.saved) deaths.add(n.wolfTarget);
+  if (n.poisoned) deaths.add(n.poisoned);
+  for (const p of s.players) if (deaths.has(p.id)) p.alive = false;
+  s.lastDeaths = [...deaths];
+  s.timers = {};
+  s.phase = 'day';
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -338,11 +352,13 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       timerSeq: 0,
       timers: {},
       potions: { antidote: true, poison: true },
+      lastDeaths: [],
     };
     return { state: created, events: [lobbyEvent(created)] };
   }
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
+  if (changed) maybeResolveNight(c);
   return { state: changed ? c.s : state, events: c.events };
 }
