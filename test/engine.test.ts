@@ -677,6 +677,8 @@ describe('day-phase: 輪流發言', () => {
 
 // 第一夜 p7 死亡，存活 p1~p6、p8（狼人 p1~p3）。房主結束討論，進入投票
 const voting = () => run([{ type: 'endDiscussion', user: 'p1' }], dawned('p7', 'skip').state);
+// 同上，但狼人 p3 已經死亡（2 狼對 4 好人），放逐一位好人後遊戲還不會因為狼人追上好人而結束
+const votingP3Dead = () => run([{ type: 'endDiscussion', user: 'p1' }], kill(dawned('p7', 'skip').state, 'p3'));
 const votes = (pairs: [string, string][]) => pairs.map(([user, target]) => ({ type: 'dayVote', user, target }) as Action);
 
 describe('day-phase: 放逐投票', () => {
@@ -695,15 +697,15 @@ describe('day-phase: 放逐投票', () => {
 
   it('單一最高票被放逐，公開每個人的投票，不公開角色', () => {
     const { state, events } = run(
-      votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p5', 'p1'], ['p6', 'p1'], ['p4', 'abstain'], ['p8', 'abstain']]),
+      votes([['p4', 'p1'], ['p5', 'p1'], ['p6', 'p1'], ['p1', 'p4'], ['p2', 'p4'], ['p3', 'abstain'], ['p8', 'abstain']]),
       voting().state,
     );
     const text = announces(events).join('\n');
-    expect(text).toContain('<@p1> → <@p4>');
+    expect(text).toContain('<@p4> → <@p1>');
     expect(text).toContain('<@p8> → 棄票');
-    expect(text).toContain('<@p4> 被放逐');
-    expect(text).not.toContain('預言家');
-    expect(isDead(state, 'p4')).toBe(true);
+    expect(text).toContain('<@p1> 被放逐');
+    expect(text).not.toContain('狼人');
+    expect(isDead(state, 'p1')).toBe(true);
   });
 
   it('時限內可以改票', () => {
@@ -828,16 +830,16 @@ describe('day-phase: 獵人開槍', () => {
     expect(values(p)).toContain('none');
     expect(announces(night.events).some((t) => t.includes('輪流發言'))).toBe(false);
 
-    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], night.state);
-    expect(announces(shot.events)).toContainEqual(expect.stringContaining('獵人 <@p6> 開槍帶走了 <@p8>'));
-    expect(isDead(shot.state, 'p8')).toBe(true);
+    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p1' }], night.state);
+    expect(announces(shot.events)).toContainEqual(expect.stringContaining('獵人 <@p6> 開槍帶走了 <@p1>'));
+    expect(isDead(shot.state, 'p1')).toBe(true);
     expect(shot.state.phase).toBe('speech');
   });
 
   it('被放逐的獵人開槍後，判斷勝負再進入夜晚', () => {
     const exiled = run(
-      votes([['p1', 'p6'], ['p2', 'p6'], ['p3', 'p6'], ['p4', 'abstain'], ['p5', 'abstain'], ['p6', 'abstain'], ['p8', 'abstain']]),
-      voting().state,
+      votes([['p1', 'p6'], ['p2', 'p6'], ['p4', 'p6'], ['p5', 'abstain'], ['p6', 'abstain'], ['p8', 'abstain']]),
+      votingP3Dead().state,
     );
     const afterWords = run([{ type: 'endSpeech', user: 'p6' }], exiled.state);
     expect(afterWords.state.phase).toBe('hunter');
@@ -847,7 +849,8 @@ describe('day-phase: 獵人開槍', () => {
   });
 
   it('被毒死的獵人不能開槍', () => {
-    const { state, events } = dawned('p7', 'poison:p6');
+    const { state, events } = dawned('none', 'poison:p6');
+    expect(isDead(state, 'p6')).toBe(true);
     expect(prompts(events, 'hunterShoot')).toEqual([]);
     expect(announces(events).some((t) => t.includes('獵人'))).toBe(false);
     expect(state.phase).toBe('speech');
@@ -1193,7 +1196,7 @@ describe('day-phase: 遺言', () => {
   });
 
   it('第一夜兩人死亡：依死訊公布的順序講', () => {
-    const { state } = fullNight('p7', 'poison:p4');
+    const { state } = fullNight('p7', 'poison:p1');
     const [first, second] = state.lastDeaths;
     expect(state.speaker).toBe(first);
     const next = run([{ type: 'endSpeech', user: first }], state);
@@ -1227,8 +1230,8 @@ describe('day-phase: 遺言', () => {
 
   it('被放逐者講遺言，結束後才進入夜晚', () => {
     const exiled = run(
-      votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p5', 'p1'], ['p6', 'p1'], ['p4', 'abstain'], ['p8', 'abstain']]),
-      voting().state,
+      votes([['p1', 'p4'], ['p2', 'p4'], ['p6', 'p4'], ['p5', 'p1'], ['p4', 'abstain'], ['p8', 'abstain']]),
+      votingP3Dead().state,
     );
     expect(exiled.state).toMatchObject({ phase: 'lastWords', speaker: 'p4' });
     expect(lastWordsPrompt(exiled.events).text).toContain('🕯️ <@p4> 的遺言（30 秒）');
@@ -1237,8 +1240,8 @@ describe('day-phase: 遺言', () => {
 
   it('獵人先講遺言再開槍', () => {
     const exiled = run(
-      votes([['p1', 'p6'], ['p2', 'p6'], ['p3', 'p6'], ['p4', 'abstain'], ['p5', 'abstain'], ['p6', 'abstain'], ['p8', 'abstain']]),
-      voting().state,
+      votes([['p1', 'p6'], ['p2', 'p6'], ['p4', 'p6'], ['p5', 'abstain'], ['p6', 'abstain'], ['p8', 'abstain']]),
+      votingP3Dead().state,
     );
     expect(exiled.state.phase).toBe('lastWords');
     expect(prompts(exiled.events, 'hunterShoot')).toEqual([]);
@@ -1247,7 +1250,7 @@ describe('day-phase: 遺言', () => {
   });
 
   it('被獵人帶走的人沒有遺言', () => {
-    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], dawned('p6', 'skip').state);
+    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p1' }], dawned('p6', 'skip').state);
     expect(shot.state.phase).toBe('speech');
   });
 
@@ -1988,5 +1991,23 @@ describe('bot-players: bot 理解真人的發言', () => {
     const after = run([{ type: 'chat', user: 'p1', text: `我是預言家，查殺 ${mention(wolf)}` }], good).state;
     const vote = toVote(after).state;
     expect(vote.suspects[wolf]).toBe('p1');
+  });
+});
+
+describe('win-condition: 狼人數量追上好人', () => {
+  it('存活 2 狼 2 好人（村民和神職都還在）：狼人獲勝', () => {
+    expect(checkWinner(table('WWSiVv'))).toBe('wolves'); // 存活：2 狼、預言家、村民
+  });
+
+  it('狼王也算狼人：狼人 + 狼王 2 名對 2 名好人', () => {
+    expect(checkWinner(table('WGSV'))).toBe('wolves');
+  });
+
+  it('存活 2 狼 3 好人：勝負未定', () => {
+    expect(checkWinner(table('WWSIV'))).toBeNull();
+  });
+
+  it('狼人全滅仍然優先判好人勝', () => {
+    expect(checkWinner(table('wwSV'))).toBe('good');
   });
 });
