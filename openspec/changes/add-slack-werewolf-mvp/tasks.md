@@ -8,7 +8,7 @@
 
 ## 2. Engine：房間（game-lobby）
 
-- [ ] 2.1 定義 `GameState`、`Action`、`GameEvent` 型別和 `applyAction` 的骨架，實作開房、加入、離開、房主離開就取消，確認 game-lobby 中「開房」「加入與離開房間」的 scenarios 測試通過
+- [x] 2.1 定義 `GameState`、`Action`、`GameEvent` 型別和 `applyAction` 的骨架，實作開房、加入、離開、房主離開就取消，確認 game-lobby 中「開房」「加入與離開房間」的 scenarios 測試通過
 - [ ] 2.2 實作開始遊戲的檢查（只有房主能開始、需要 6～12 人、開始後不能再加入）和取消遊戲，確認「開始遊戲」「取消遊戲」的 scenarios 測試通過
 
 ## 3. Engine：發牌（role-assignment）
