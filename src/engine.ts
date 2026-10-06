@@ -556,7 +556,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       phase: 'lobby',
       players: [{ id: action.user, alive: true }],
       day: 0,
-      timerSeq: 0,
+      timerSeq: state?.timerSeq ?? 0, // 接續上一局的編號，舊計時器的 timeout 才不會被誤認
       timers: {},
       potions: { antidote: true, poison: true },
       lastDeaths: [],

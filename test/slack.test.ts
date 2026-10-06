@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GameHost, parseCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -157,5 +157,33 @@ describe('Slack：event 轉換', () => {
     await host.dispatch('C1', { type: 'wolfVote', user: 'U2', target: 'U5' });
     const witchPrompt = postsTo(calls, 'D:U4').at(-1)!;
     expect(buttonsOf(witchPrompt).map((b: any) => b.text.text)).toContain('毒 alice');
+  });
+});
+
+describe('Slack：遊戲按鈕與計時', () => {
+  it('把各種按鈕轉成 engine action', () => {
+    expect(buttonAction('join', 'join', 'U1')).toEqual({ type: 'join', user: 'U1' });
+    expect(buttonAction('leave', 'leave', 'U1')).toEqual({ type: 'leave', user: 'U1' });
+    expect(buttonAction('wolfKill', 'U5', 'U1')).toEqual({ type: 'wolfVote', user: 'U1', target: 'U5' });
+    expect(buttonAction('seerCheck', 'U1', 'U3')).toEqual({ type: 'seerCheck', user: 'U3', target: 'U1' });
+    expect(buttonAction('witch', 'poison:U1', 'U4')).toEqual({ type: 'witchAct', user: 'U4', choice: 'poison:U1' });
+    expect(buttonAction('dayVote', 'abstain', 'U2')).toEqual({ type: 'dayVote', user: 'U2', target: 'abstain' });
+    expect(buttonAction('pkVote', 'U1', 'U2')).toEqual({ type: 'dayVote', user: 'U2', target: 'U1' });
+    expect(buttonAction('hunterShoot', 'none', 'U6')).toEqual({ type: 'hunterShoot', user: 'U6', target: 'none' });
+    expect(buttonAction('unknown', 'x', 'U1')).toBeNull();
+  });
+
+  it('在私訊裡按的按鈕會送到 value 指定的遊戲', async () => {
+    const { host } = await startedHost();
+    await host.button('ww:wolfKill:4', 'C1|U5', 'U1', 'alice');
+    expect(host.games.get('C1')!.night!.wolfVotes).toEqual({ U1: 'U5' });
+  });
+
+  it('startTimer 會設定計時，時間到送出 timeout', async () => {
+    const { host, timers, calls } = await startedHost();
+    expect(timers.at(-1)!.ms).toBe(60_000);
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(postsTo(calls, 'D:U1,U2').map((c) => c.args.text)).toContainEqual(expect.stringContaining('沒有擊殺目標'));
   });
 });

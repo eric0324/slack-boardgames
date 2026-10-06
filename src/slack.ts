@@ -35,6 +35,27 @@ export function parseCommand(text: string, user: string, channel: string): Actio
   }
 }
 
+export function buttonAction(kind: string, value: string, user: string): Action | null {
+  switch (kind) {
+    case 'join':
+    case 'leave':
+      return { type: kind, user };
+    case 'wolfKill':
+      return { type: 'wolfVote', user, target: value };
+    case 'seerCheck':
+      return { type: 'seerCheck', user, target: value };
+    case 'witch':
+      return { type: 'witchAct', user, choice: value };
+    case 'dayVote':
+    case 'pkVote':
+      return { type: 'dayVote', user, target: value };
+    case 'hunterShoot':
+      return { type: 'hunterShoot', user, target: value };
+    default:
+      return null;
+  }
+}
+
 // 每個按鈕的 action_id 是 `ww:<kind>:<index>`（同一則訊息裡不能重複），value 是 `<遊戲頻道>|<選項值>`
 const button = (kind: string, i: number, label: string, channel: string, value: string) => ({
   type: 'button',
@@ -51,12 +72,19 @@ export class GameHost {
   private wolfChats = new Map<string, { users: string; id: string }>(); // 遊戲頻道 → 狼人多人私訊
   private queue: Promise<void> = Promise.resolve();
   private rng: Rng;
+  private setTimer: (fn: () => void, ms: number) => void;
 
   constructor(
     private client: SlackClient,
     opts: HostOptions = {},
   ) {
     this.rng = opts.rng ?? Math.random;
+    this.setTimer = opts.setTimer ?? ((fn, ms) => void setTimeout(fn, ms));
+  }
+
+  // 等目前排隊中的訊息都送完（測試用）
+  idle(): Promise<void> {
+    return this.queue;
   }
 
   command(channel: string, user: string, userName: string, text: string): Promise<void> {
@@ -69,9 +97,9 @@ export class GameHost {
   button(actionId: string, value: string, user: string, userName: string): Promise<void> {
     this.names.set(user, userName);
     const kind = actionId.split(':')[1];
-    const [channel] = value.split('|');
-    const action: Action | null = kind === 'join' || kind === 'leave' ? { type: kind, user } : null;
-    return action ? this.dispatch(channel, action) : Promise.resolve();
+    const sep = value.indexOf('|');
+    const action = buttonAction(kind, value.slice(sep + 1), user);
+    return action ? this.dispatch(value.slice(0, sep), action) : Promise.resolve();
   }
 
   dispatch(channel: string, action: Action): Promise<void> {
@@ -119,6 +147,9 @@ export class GameHost {
   private async send(channel: string, e: GameEvent) {
     const chat = this.client.chat;
     switch (e.type) {
+      case 'startTimer':
+        this.setTimer(() => void this.dispatch(channel, { type: 'timeout', id: e.id }), e.ms);
+        return;
       case 'dm':
         await chat.postMessage({ channel: await this.dm(e.to), text: e.text });
         return;

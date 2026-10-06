@@ -841,3 +841,21 @@ describe('整局流程', () => {
     expect(announces(e3)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
   });
 });
+
+describe('game-lobby: 取消後計時器失效', () => {
+  it('取消後重新開房，舊遊戲的計時器不會影響新遊戲', () => {
+    const old = started(8);
+    const oldTimer = timerIds(old.events)[0];
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], old.state).state;
+    const fresh = run(
+      [
+        { type: 'new', user: 'p1', channel: 'C1' },
+        ...Array.from({ length: 7 }, (_, i) => ({ type: 'join', user: `p${i + 2}` }) as Action),
+        { type: 'start', user: 'p1' },
+      ],
+      cancelled,
+    );
+    expect(timerIds(fresh.events)).not.toContain(oldTimer);
+    expect(run([{ type: 'timeout', id: oldTimer }], fresh.state).events).toEqual([]);
+  });
+});

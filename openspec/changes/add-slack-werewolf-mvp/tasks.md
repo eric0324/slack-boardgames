@@ -41,7 +41,7 @@
 
 - [x] 7.1 實作 `/werewolf new|start|cancel|vote` 指令和「加入」「離開」按鈕，轉成 engine action，並把房間公告更新成最新名單；用假的 Slack client 確認指令和按鈕會產生正確的 action 和 API 呼叫
 - [x] 7.2 實作 event 轉換：`announce` 對應 `chat.postMessage`、`dm` 對應 `conversations.open` + `chat.postMessage`、`wolfChat` 對應 MPIM、`ephemeral` 對應 `chat.postEphemeral`、`prompt` 對應帶按鈕的 Block Kit 訊息；用假的 Slack client 確認每種 event 都呼叫了正確的 API
-- [ ] 7.3 實作夜晚、投票、獵人的按鈕 handler，以及 `startTimer` 對應的 `setTimeout` → `timeout` action；用假的 client 和 fake timers 確認按鈕和超時都會送出正確的 action
+- [x] 7.3 實作夜晚、投票、獵人的按鈕 handler，以及 `startTimer` 對應的 `setTimeout` → `timeout` action；用假的 client 和 fake timers 確認按鈕和超時都會送出正確的 action
 - [ ] 7.4 實作 `src/index.ts`（讀取 `.env`，用 Socket Mode 啟動），在 `README.md` 寫下 Slack App 的建立步驟（scopes、slash command、Socket Mode），確認 `npm start` 可以連上 Slack
 
 ## 8. 整合驗證
