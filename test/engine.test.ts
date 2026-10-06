@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { botLine, randomBotName } from '../src/botLines.js';
-import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
+import { applyAction, checkWinner, chooseSeerTarget, dealRoles, isBot, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
 
@@ -1778,5 +1778,33 @@ describe('bot-players: bot 的顯示方式（隨機名字）', () => {
     const taken = new Set<string>();
     for (let i = 0; i < 30; i++) taken.add(randomBotName(() => 0, taken));
     expect(taken.size).toBe(30);
+  });
+});
+
+describe('bot-players: bot 需要的資訊（31.1）', () => {
+  it('記錄預言家的查驗結果', () => {
+    const { state } = run(
+      [
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+      ],
+      started(8).state,
+    );
+    expect(state.checks).toEqual([{ night: 1, target: 'p1', wolf: true }]);
+  });
+
+  it('記錄女巫的用藥', () => {
+    const saved = run([{ type: 'witchAct', user: 'p5', choice: 'save' }], wolvesKill('p7').state).state;
+    expect(saved.witchLog).toEqual([{ night: 1, saved: 'p7' }]);
+    const poisoned = run([{ type: 'witchAct', user: 'p5', choice: 'poison:p1' }], wolvesKill('p7').state).state;
+    expect(poisoned.witchLog).toEqual([{ night: 1, poisoned: 'p1' }]);
+  });
+
+  it('預言家 bot 優先查還沒查過的存活玩家', () => {
+    const s = started(8).state;
+    const checked: GameState = {
+      ...s,
+      checks: ['p1', 'p2', 'p3', 'p5', 'p6', 'p7'].map((target) => ({ night: 1, target, wolf: false })),
+    };
+    for (const r of [0, 0.5, 0.99999]) expect(chooseSeerTarget(checked, 'p4', () => r)).toBe('p8');
   });
 });

@@ -85,6 +85,11 @@ export interface GameState {
   winner?: 'good' | 'wolves'; // 分出勝負後才有；取消的遊戲沒有
   knightUsed: boolean; // 騎士是否已經決鬥過
   suspects: Record<string, string>; // bot → 當天發言時懷疑的玩家（投票時優先投他）
+  checks: { night: number; target: string; wolf: boolean }[]; // 預言家的真實查驗結果
+  witchLog: { night: number; saved?: string; poisoned?: string }[]; // 女巫的用藥紀錄
+  claims: { by: string; night: number; target: string; wolf: boolean }[]; // bot 公開報過的查驗（可能是假的）
+  fakeSeer?: string; // 悍跳預言家的狼人 bot
+  fakeSeerDecided: boolean; // 第一天是否已經決定過要不要悍跳
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -319,6 +324,13 @@ function witchOptions(s: GameState, witch: string): Option[] {
 const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
 const aliveBot = (s: GameState, role: Role) => aliveWith(s, role).find((p) => isBot(p.id));
 
+// 預言家 bot 優先查還沒查過的存活玩家
+export function chooseSeerTarget(s: GameState, seer: string, rng: Rng): string {
+  const others = alive(s).map((p) => p.id).filter((id) => id !== seer);
+  const unchecked = others.filter((id) => !s.checks.some((c) => c.target === id));
+  return pick(unchecked.length ? unchecked : others, rng);
+}
+
 // 找出下一個輪到 bot 的行動；沒有就回傳 null
 function nextBotAction(s: GameState, rng: Rng): GameAction | null {
   const n = s.night;
@@ -329,10 +341,7 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
       if (wolf) return { type: 'wolfVote', user: wolf.id, target: pick(prey, rng) };
     }
     const seer = aliveBot(s, 'seer');
-    if (seer && !n.seerDone) {
-      const others = alive(s).filter((p) => p.id !== seer.id).map((p) => p.id);
-      return { type: 'seerCheck', user: seer.id, target: pick(others, rng) };
-    }
+    if (seer && !n.seerDone) return { type: 'seerCheck', user: seer.id, target: chooseSeerTarget(s, seer.id, rng) };
     const witch = aliveBot(s, 'witch');
     if (witch && n.wolfTarget !== undefined && !n.witchDone) {
       return { type: 'witchAct', user: witch.id, choice: pick(witchOptions(s, witch.id), rng).value };
@@ -752,6 +761,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (action.target === action.user || !isAlive(s, action.target)) return false;
       n.seerDone = true;
       const target = player(s, action.target);
+      s.checks.push({ night: s.day, target: target.id, wolf: isWolf(target.role) });
       const side = isWolf(target.role) ? '狼人' : '好人';
       c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
@@ -764,12 +774,14 @@ function handle(c: Ctx, action: GameAction): boolean {
         if (!canSave(s, action.user)) return false;
         n.saved = true;
         s.potions.antidote = false;
+        s.witchLog.push({ night: s.day, saved: n.wolfTarget! });
         c.events.push({ type: 'dm', to: action.user, text: `你對 ${mention(n.wolfTarget!)} 使用了解藥。` });
       } else if (action.choice.startsWith('poison:')) {
         const target = action.choice.slice('poison:'.length);
         if (!s.potions.poison || target === action.user || !isAlive(s, target)) return false;
         n.poisoned = target;
         s.potions.poison = false;
+        s.witchLog.push({ night: s.day, poisoned: target });
         c.events.push({ type: 'dm', to: action.user, text: `你對 ${mention(target)} 使用了毒藥。` });
       } else if (action.choice === 'skip') {
         c.events.push({ type: 'dm', to: action.user, text: '你今晚不使用藥。' });
@@ -903,6 +915,10 @@ function createLobby(prev: GameState | undefined, host: string, channel: string)
     lastWords: [],
     knightUsed: false,
     suspects: {},
+    checks: [],
+    witchLog: [],
+    claims: [],
+    fakeSeerDecided: false,
     votes: {},
     candidates: [],
     voters: [],
