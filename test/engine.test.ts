@@ -803,3 +803,41 @@ describe('win-condition: 判定時機（獵人）', () => {
     expect(announces(shot.events)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
   });
 });
+
+describe('整局流程', () => {
+  it('6 人局：第一夜女巫救人，白天放逐一狼，第二夜女巫毒死最後一狼，好人獲勝', () => {
+    // p1、p2 狼人，p3 預言家，p4 女巫，p5、p6 村民
+    const { state: s1, events: e1 } = run([
+      { type: 'new', user: 'p1', channel: 'C1' },
+      ...['p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'join', user }) as Action),
+      { type: 'start', user: 'p1' },
+      { type: 'seerCheck', user: 'p3', target: 'p1' },
+      { type: 'wolfVote', user: 'p1', target: 'p5' },
+      { type: 'wolfVote', user: 'p2', target: 'p5' },
+      { type: 'witchAct', user: 'p4', choice: 'save' },
+    ]);
+    expect(announces(e1)).toContainEqual(expect.stringContaining('平安夜'));
+    expect(s1.phase).toBe('discussion');
+
+    const { state: s2 } = run(
+      [
+        { type: 'endDiscussion', user: 'p1' },
+        ...votes([['p3', 'p1'], ['p4', 'p1'], ['p5', 'p1'], ['p6', 'p1'], ['p1', 'p3'], ['p2', 'p3']]),
+      ],
+      s1,
+    );
+    expect(isDead(s2, 'p1')).toBe(true);
+    expect(s2).toMatchObject({ phase: 'night', day: 2 });
+
+    const { state: s3, events: e3 } = run(
+      [
+        { type: 'seerCheck', user: 'p3', target: 'p2' },
+        { type: 'wolfVote', user: 'p2', target: 'p3' },
+        { type: 'witchAct', user: 'p4', choice: 'poison:p2' },
+      ],
+      s2,
+    );
+    expect(s3.phase).toBe('ended');
+    expect(announces(e3)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
+  });
+});
