@@ -4,7 +4,7 @@
 
 ## 1. 專案設定
 
-- [ ] 1.1 建立 `package.json`、`tsconfig.json`、`.gitignore`、`.env.example`，安裝 `@slack/bolt`、`typescript`、`vitest`、`tsx`，確認 `npx vitest run` 可以執行（0 個測試也算通過）
+- [x] 1.1 建立 `package.json`、`tsconfig.json`、`.gitignore`、`.env.example`，安裝 `@slack/bolt`、`typescript`、`vitest`、`tsx`，確認 `npx vitest run` 可以執行（0 個測試也算通過）
 
 ## 2. Engine：房間（game-lobby）
 
