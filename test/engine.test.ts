@@ -1273,3 +1273,29 @@ describe('night-phase: 狼人選擇不殺人', () => {
     expect(new Set([a, b])).toEqual(new Set([null, 'p6']));
   });
 });
+
+describe('night-phase: 狼人倒數提醒', () => {
+  const remindTimer = (events: GameEvent[]) =>
+    events.find((e) => e.type === 'startTimer' && e.ms === 30_000) as { id: number } | undefined;
+
+  it('剩 30 秒時提醒還沒選的狼人', () => {
+    const { state, events } = started(8);
+    const timer = remindTimer(events)!;
+    expect(timer).toBeDefined();
+    const voted = run([{ type: 'wolfVote', user: 'p1', target: 'p7' }], state).state;
+    const after = run([{ type: 'timeout', id: timer.id }], voted);
+    expect(wolfChatText(after.events)).toBe('⏰ 剩下 30 秒，還沒選的：<@p2>、<@p3>');
+  });
+
+  it('狼人都選好了就不提醒', () => {
+    const { events } = started(8);
+    const timer = remindTimer(events)!;
+    const decided = wolvesKill('p7').state;
+    expect(run([{ type: 'timeout', id: timer.id }], decided).events).toEqual([]);
+  });
+
+  it('60 秒的狼人計時器仍然是第一個計時器', () => {
+    const { events } = started(8);
+    expect(events.find((e) => e.type === 'startTimer')).toMatchObject({ ms: 60_000 });
+  });
+});

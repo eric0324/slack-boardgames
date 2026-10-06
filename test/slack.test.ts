@@ -183,8 +183,9 @@ describe('Slack：遊戲按鈕與計時', () => {
 
   it('startTimer 會設定計時，時間到送出 timeout', async () => {
     const { host, timers, calls } = await startedHost();
-    expect(timers.at(-1)!.ms).toBe(60_000);
-    timers.at(-1)!.fn();
+    const wolfTimer = timers.find((t) => t.ms === 60_000)!;
+    expect(wolfTimer).toBeDefined();
+    wolfTimer.fn();
     await host.idle();
     expect(postsTo(calls, 'D:U1,U2').map((c) => c.args.text)).toContainEqual(expect.stringContaining('沒有擊殺目標'));
   });

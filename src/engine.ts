@@ -39,6 +39,7 @@ export const isBot = (id: string) => id.startsWith('bot:');
 export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<@${id}>`);
 
 export const ACTION_MS = 60_000;
+const WOLF_REMIND_BEFORE_MS = 30_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間
 export const LAST_WORDS_MS = 30_000;
 export const DISCUSSION_MS = 2 * 60_000; // 輪流發言後的自由討論
@@ -58,7 +59,7 @@ export interface NightState {
   poisoned: string | null;
 }
 
-type TimerName = 'wolves' | 'witch' | 'phase';
+type TimerName = 'wolves' | 'wolfRemind' | 'witch' | 'phase';
 
 export interface GameState {
   channel: string;
@@ -234,6 +235,7 @@ function enterNight(c: Ctx) {
     });
   }
   startTimer(c, 'wolves', ACTION_MS);
+  startTimer(c, 'wolfRemind', ACTION_MS - WOLF_REMIND_BEFORE_MS);
 }
 
 function decideWolves(c: Ctx) {
@@ -698,6 +700,15 @@ function handle(c: Ctx, action: GameAction): boolean {
         delete s.timers.wolves;
         n.seerDone = true;
         if (n.wolfTarget === undefined) decideWolves(c);
+        return true;
+      }
+      if (action.id === s.timers.wolfRemind && n) {
+        delete s.timers.wolfRemind;
+        const waiting = aliveWith(s, 'werewolf').filter((w) => !n.wolfVotes[w.id]);
+        if (n.wolfTarget === undefined && waiting.length) {
+          const text = `⏰ 剩下 ${WOLF_REMIND_BEFORE_MS / 1000} 秒，還沒選的：${waiting.map((w) => mention(w.id)).join('、')}`;
+          c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text });
+        }
         return true;
       }
       if (action.id === s.timers.witch && n) {
