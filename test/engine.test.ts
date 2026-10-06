@@ -564,3 +564,34 @@ describe('win-condition: 判定時機', () => {
     expect(texts.some((t) => t.includes('討論'))).toBe(false);
   });
 });
+
+const lastTimer = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer').at(-1) as { id: number; ms: number };
+
+describe('day-phase: 討論時間', () => {
+  it('天亮後進入 5 分鐘討論，剩 1 分鐘時提醒，時間到進入投票', () => {
+    const night = fullNight('p7', 'skip');
+    expect(night.state.phase).toBe('discussion');
+    expect(announces(night.events)).toContainEqual(expect.stringContaining('5 分鐘'));
+    const t1 = lastTimer(night.events);
+    expect(t1.ms).toBe(4 * 60_000);
+
+    const remind = run([{ type: 'timeout', id: t1.id }], night.state);
+    expect(announces(remind.events)).toContainEqual(expect.stringContaining('1 分鐘'));
+    const t2 = lastTimer(remind.events);
+    expect(t2.ms).toBe(60_000);
+
+    expect(run([{ type: 'timeout', id: t2.id }], remind.state).state.phase).toBe('vote');
+  });
+
+  it('房主可以提前結束討論', () => {
+    const { state } = fullNight('p7', 'skip');
+    expect(run([{ type: 'endDiscussion', user: 'p1' }], state).state.phase).toBe('vote');
+  });
+
+  it('非房主不能提前結束討論', () => {
+    const { state } = fullNight('p7', 'skip');
+    const after = run([{ type: 'endDiscussion', user: 'p2' }], state);
+    expect(after.state.phase).toBe('discussion');
+    expect(ephemeralTo(after.events, 'p2')).toBeDefined();
+  });
+});

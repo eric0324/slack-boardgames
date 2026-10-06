@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'discussion' | 'ended';
+export type Phase = 'lobby' | 'night' | 'discussion' | 'vote' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -37,6 +37,8 @@ const ROLE_HELP: Record<Role, string> = {
 export const mention = (id: string) => `<@${id}>`;
 
 export const ACTION_MS = 60_000;
+export const DISCUSSION_MS = 5 * 60_000;
+const REMIND_BEFORE_MS = 60_000;
 
 export interface Player {
   id: string;
@@ -53,7 +55,7 @@ export interface NightState {
   poisoned: string | null;
 }
 
-type TimerName = 'wolves' | 'witch';
+type TimerName = 'wolves' | 'witch' | 'phase';
 
 export interface GameState {
   channel: string;
@@ -66,6 +68,7 @@ export interface GameState {
   night?: NightState;
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
+  reminded: boolean; // 討論時間是否已經提醒過剩 1 分鐘
 }
 
 export type Action =
@@ -77,6 +80,7 @@ export type Action =
   | { type: 'wolfVote'; user: string; target: string }
   | { type: 'seerCheck'; user: string; target: string }
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
+  | { type: 'endDiscussion'; user: string }
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -258,7 +262,20 @@ function dawn(c: Ctx) {
     : '天亮了。昨晚是平安夜。';
   c.events.push({ type: 'announce', text });
   if (checkGameOver(c)) return;
+  startDiscussion(c);
+}
+
+function startDiscussion(c: Ctx) {
   c.s.phase = 'discussion';
+  c.s.reminded = false;
+  c.s.timers = {};
+  c.events.push({ type: 'announce', text: `開始討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
+  startTimer(c, 'phase', DISCUSSION_MS - REMIND_BEFORE_MS);
+}
+
+function startVote(c: Ctx) {
+  c.s.phase = 'vote';
+  c.s.timers = {};
 }
 
 // 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true
@@ -361,6 +378,12 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       n.witchDone = true;
       return true;
     }
+    case 'endDiscussion': {
+      if (s.phase !== 'discussion') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以提前結束討論。');
+      startVote(c);
+      return true;
+    }
     case 'timeout': {
       const n = s.night;
       if (action.id === s.timers.wolves && n) {
@@ -372,6 +395,16 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       if (action.id === s.timers.witch && n) {
         delete s.timers.witch;
         n.witchDone = true;
+        return true;
+      }
+      if (action.id === s.timers.phase && s.phase === 'discussion') {
+        if (s.reminded) {
+          startVote(c);
+        } else {
+          s.reminded = true;
+          c.events.push({ type: 'announce', text: '討論時間剩下 1 分鐘。' });
+          startTimer(c, 'phase', REMIND_BEFORE_MS);
+        }
         return true;
       }
       return false;
@@ -394,6 +427,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       timers: {},
       potions: { antidote: true, poison: true },
       lastDeaths: [],
+      reminded: false,
     };
     return { state: created, events: [lobbyEvent(created)] };
   }
