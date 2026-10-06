@@ -4,12 +4,12 @@ import { applyAction, MAX_PLAYERS, mention, type Action, type GameEvent, type Ga
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
   chat: {
-    postMessage(args: Record<string, unknown>): Promise<any>;
-    update(args: Record<string, unknown>): Promise<any>;
-    postEphemeral(args: Record<string, unknown>): Promise<any>;
+    postMessage(args: any): Promise<any>;
+    update(args: any): Promise<any>;
+    postEphemeral(args: any): Promise<any>;
   };
   conversations: {
-    open(args: Record<string, unknown>): Promise<any>;
+    open(args: any): Promise<any>;
   };
 }
 
