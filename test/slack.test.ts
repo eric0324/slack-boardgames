@@ -280,3 +280,13 @@ describe('Slack：公告 GIF', () => {
     }
   });
 });
+
+describe('Slack：輪流發言', () => {
+  it('/werewolf next 轉成跳過發言者', () => {
+    expect(parseCommand('next', 'U1', 'C1')).toEqual({ type: 'skipSpeaker', user: 'U1' });
+  });
+
+  it('「結束發言」按鈕轉成 endSpeech', () => {
+    expect(buttonAction('endSpeech', 'U3', 'U3')).toEqual({ type: 'endSpeech', user: 'U3' });
+  });
+});
