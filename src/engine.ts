@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'day' | 'ended';
+export type Phase = 'lobby' | 'night' | 'discussion' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -107,13 +107,20 @@ interface Ctx {
   rng: Rng;
 }
 
-export function dealRoles(n: number, rng: Rng): Role[] {
-  const roles = Object.entries(ROLE_TABLE[n]).flatMap(([role, k]) => Array<Role>(k).fill(role as Role));
-  for (let i = roles.length - 1; i > 0; i--) {
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [roles[i], roles[j]] = [roles[j], roles[i]];
+    [a[i], a[j]] = [a[j], a[i]];
   }
-  return roles;
+  return a;
+}
+
+export function dealRoles(n: number, rng: Rng): Role[] {
+  return shuffle(
+    Object.entries(ROLE_TABLE[n]).flatMap(([role, k]) => Array<Role>(k).fill(role as Role)),
+    rng,
+  );
 }
 
 const GODS: Role[] = ['seer', 'witch', 'hunter'];
@@ -239,10 +246,19 @@ function maybeResolveNight(c: Ctx) {
   if (n.wolfTarget && !n.saved) deaths.add(n.wolfTarget);
   if (n.poisoned) deaths.add(n.poisoned);
   for (const p of s.players) if (deaths.has(p.id)) p.alive = false;
-  s.lastDeaths = [...deaths];
+  s.lastDeaths = shuffle([...deaths], c.rng);
   s.timers = {};
-  s.phase = 'day';
-  checkGameOver(c);
+  dawn(c);
+}
+
+function dawn(c: Ctx) {
+  const deaths = c.s.lastDeaths;
+  const text = deaths.length
+    ? `天亮了。昨晚死亡的是 ${deaths.map(mention).join('、')}。死亡的玩家請不要再發言。`
+    : '天亮了。昨晚是平安夜。';
+  c.events.push({ type: 'announce', text });
+  if (checkGameOver(c)) return;
+  c.s.phase = 'discussion';
 }
 
 // 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true

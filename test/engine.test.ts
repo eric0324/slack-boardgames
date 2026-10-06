@@ -522,3 +522,45 @@ describe('win-condition: 遊戲結束公開身分', () => {
     expect(after).toMatchObject({ phase: 'lobby', host: 'p9' });
   });
 });
+
+const announces = (events: GameEvent[]) =>
+  events.filter((e) => e.type === 'announce').map((e) => (e as { text: string }).text);
+
+describe('day-phase: 天亮公布死訊', () => {
+  it('公布昨晚死亡的玩家，不透露死因和角色', () => {
+    const { events } = fullNight('p7', 'poison:p8');
+    const dawn = announces(events).find((t) => t.includes('天亮'))!;
+    expect(dawn).toContain('<@p7>');
+    expect(dawn).toContain('<@p8>');
+    expect(dawn).not.toMatch(/狼人|村民|毒|刀|殺/);
+    expect(dawn).toContain('不要再發言');
+  });
+
+  it('多位死者的順序隨機', () => {
+    const night = run(
+      [
+        ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p7' }) as Action),
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+      ],
+      started(8).state,
+    ).state;
+    const last: Action = { type: 'witchAct', user: 'p5', choice: 'poison:p8' };
+    const order = (r: number) => announces(applyAction(night, last, () => r).events).find((t) => t.includes('天亮'));
+    expect(order(0)).not.toBe(order(0.99999));
+  });
+
+  it('平安夜', () => {
+    const { events } = fullNight('p7', 'save');
+    expect(announces(events)).toContainEqual(expect.stringContaining('平安夜'));
+  });
+});
+
+describe('win-condition: 判定時機', () => {
+  it('天亮就分出勝負：先公布死訊再結束，不進入討論', () => {
+    const { state, events } = wolvesWinTonight();
+    const texts = announces(events);
+    expect(texts.findIndex((t) => t.includes('天亮'))).toBeLessThan(texts.findIndex((t) => t.includes('遊戲結束')));
+    expect(state.phase).toBe('ended');
+    expect(texts.some((t) => t.includes('討論'))).toBe(false);
+  });
+});
