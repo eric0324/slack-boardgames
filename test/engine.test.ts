@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, dealRoles, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
+import { applyAction, checkWinner, dealRoles, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
 
@@ -447,5 +447,36 @@ describe('night-phase: 夜晚結算', () => {
       state,
     ).state;
     expect(after.lastDeaths).toEqual([]);
+  });
+});
+
+// 用角色字串快速建立玩家，大寫開頭代表還活著，例如 'W' 活著的狼人、'w' 死掉的狼人
+const ROLE_CODE: Record<string, Role> = { w: 'werewolf', v: 'villager', s: 'seer', i: 'witch', h: 'hunter' };
+const table = (codes: string) =>
+  [...codes].map((ch, i) => ({ id: `p${i + 1}`, role: ROLE_CODE[ch.toLowerCase()], alive: ch !== ch.toLowerCase() }));
+
+describe('win-condition: 屠邊勝負規則', () => {
+  it('狼人全滅：好人獲勝', () => {
+    expect(checkWinner(table('wwSIHVV'))).toBe('good');
+  });
+
+  it('村民全滅：狼人獲勝，即使神職還活著', () => {
+    expect(checkWinner(table('WwSIHvv'))).toBe('wolves');
+  });
+
+  it('神職全滅：狼人獲勝，即使村民還活著', () => {
+    expect(checkWinner(table('WwsihVV'))).toBe('wolves');
+  });
+
+  it('6 人局沒有獵人：預言家和女巫都死了，狼人獲勝', () => {
+    expect(checkWinner(table('WwsiVV'))).toBe('wolves');
+  });
+
+  it('兩邊同時成立：好人獲勝', () => {
+    expect(checkWinner(table('wwSIHvv'))).toBe('good');
+  });
+
+  it('雙方都還有人：勝負未定', () => {
+    expect(checkWinner(table('WwSihVv'))).toBeNull();
   });
 });

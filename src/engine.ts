@@ -116,6 +116,16 @@ export function dealRoles(n: number, rng: Rng): Role[] {
   return roles;
 }
 
+const GODS: Role[] = ['seer', 'witch', 'hunter'];
+
+// 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅或神職全滅 → 狼人贏
+export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
+  const allDead = (match: (r: Role) => boolean) => players.filter((p) => match(p.role!)).every((p) => !p.alive);
+  if (allDead((r) => r === 'werewolf')) return 'good';
+  if (allDead((r) => r === 'villager') || allDead((r) => GODS.includes(r))) return 'wolves';
+  return null;
+}
+
 const alive = (s: GameState) => s.players.filter((p) => p.alive);
 const aliveWith = (s: GameState, role: Role) => alive(s).filter((p) => p.role === role);
 const isAlive = (s: GameState, id: string) => alive(s).some((p) => p.id === id);
