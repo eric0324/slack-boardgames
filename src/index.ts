@@ -7,7 +7,7 @@ import { StatsStore } from './stats.js';
 
 const { SLACK_BOT_TOKEN, SLACK_APP_TOKEN } = process.env;
 if (!SLACK_BOT_TOKEN || !SLACK_APP_TOKEN) {
-  console.error('請在 .env 設定 SLACK_BOT_TOKEN 和 SLACK_APP_TOKEN（參考 .env.example）');
+  console.error('Missing SLACK_BOT_TOKEN or SLACK_APP_TOKEN. Set them in .env (see .env.example).');
   process.exit(1);
 }
 
@@ -27,4 +27,4 @@ app.action<BlockAction<ButtonAction>>(/^ww:/, async ({ action, body, ack }) => {
 });
 
 await app.start();
-console.log('狼人殺 bot 已啟動（Socket Mode）');
+console.log('[werewolf] Bot is running (Socket Mode)');
