@@ -6,7 +6,7 @@ import { botLine } from './botLines.js';
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 export type Role = 'werewolf' | 'wolfKing' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -36,7 +36,7 @@ const ROLE_HELP: Record<Role, string> = {
   seer: '每晚可以查驗一位玩家是好人還是狼人。',
   witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
   hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
-  knight: '整局一次，白天輪流發言或自由討論時可以翻牌向一位玩家決鬥：對方是狼人就出局並直接入夜，對方是好人則你出局。',
+  knight: '整局一次，白天輪流發言時可以翻牌向一位玩家決鬥：對方是狼人就出局並直接入夜，對方是好人則你出局。',
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
 
@@ -49,7 +49,6 @@ export const ACTION_MS = 60_000;
 const WOLF_REMIND_BEFORE_MS = 30_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間
 export const LAST_WORDS_MS = 30_000;
-export const DISCUSSION_MS = 90_000; // 輪流發言後的自由討論
 
 export interface Player {
   id: string;
@@ -504,7 +503,7 @@ function promptKnight(c: Ctx) {
     kind: 'duel',
     audience: 'user',
     user: knight.id,
-    text: '🗡️ 你可以在輪流發言或自由討論時翻牌決鬥（整局一次）。選擇決鬥對象：',
+    text: '🗡️ 你可以在輪流發言時翻牌決鬥（整局一次）。選擇決鬥對象：',
     options: options(alive(s).filter((p) => p.id !== knight.id).map((p) => p.id)),
   });
 }
@@ -554,9 +553,7 @@ function nextSpeaker(c: Ctx) {
     openVote(c, 'pkVote', s.candidates, voters);
     return;
   }
-  s.phase = 'discussion';
-  c.events.push({ type: 'announce', text: `💬 開始自由討論，時間 ${duration(DISCUSSION_MS)}。` });
-  startTimer(c, 'phase', DISCUSSION_MS);
+  startVote(c);
 }
 
 function startVote(c: Ctx) {
@@ -644,14 +641,6 @@ function checkGameOver(c: Ctx): boolean {
     },
   );
   return true;
-}
-
-// 90_000 → 「1 分 30 秒」、120_000 → 「2 分鐘」、40_000 → 「40 秒」
-function duration(ms: number) {
-  const min = Math.floor(ms / 60_000);
-  const sec = (ms % 60_000) / 1000;
-  if (!min) return `${sec} 秒`;
-  return sec ? `${min} 分 ${sec} 秒` : `${min} 分鐘`;
 }
 
 const isSpeaking = (s: GameState) => s.phase === 'speech' || s.phase === 'pkSpeech' || s.phase === 'lastWords';
@@ -782,14 +771,14 @@ function handle(c: Ctx, action: GameAction): boolean {
       return true;
     }
     case 'endDiscussion': {
-      if (s.phase !== 'speech' && s.phase !== 'discussion') return false;
+      if (s.phase !== 'speech') return false;
       if (action.user !== s.host) return reply(c, action.user, '只有房主可以提前結束討論。');
       startVote(c);
       return true;
     }
     case 'duel': {
       if (!aliveWith(s, 'knight').some((p) => p.id === action.user) || s.knightUsed) return false;
-      if (s.phase !== 'speech' && s.phase !== 'discussion') return reply(c, action.user, '現在不能決鬥。');
+      if (s.phase !== 'speech') return reply(c, action.user, '現在不能決鬥。');
       if (action.target === action.user || !isAlive(s, action.target)) return false;
       duel(c, action.user, action.target);
       return true;
@@ -846,10 +835,6 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (action.id === s.timers.witch && n) {
         delete s.timers.witch;
         n.witchDone = true;
-        return true;
-      }
-      if (action.id === s.timers.phase && s.phase === 'discussion') {
-        startVote(c);
         return true;
       }
       if (action.id === s.timers.phase && isSpeaking(s)) {
