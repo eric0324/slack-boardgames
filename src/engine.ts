@@ -1,4 +1,4 @@
-import { botLine } from './botLines.js';
+import { botLine, randomBotName } from './botLines.js';
 
 // 狼人殺遊戲引擎：純邏輯，不碰任何 I/O。
 // applyAction(state, action, rng) → { state, events }，由 adapter 把 events 轉成 Slack 訊息。
@@ -40,9 +40,13 @@ const ROLE_HELP: Record<Role, string> = {
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
 
-// bot 玩家的 id 是 `bot:<編號>`，沒有 Slack 帳號，所以不能用 <@id>
+// bot 玩家的 id 是 `bot:<編號>:<名字>`，沒有 Slack 帳號，所以不能用 <@id>，改顯示成 🤖<名字>
 export const isBot = (id: string) => id.startsWith('bot:');
-export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<@${id}>`);
+export const mention = (id: string) => {
+  if (!isBot(id)) return `<@${id}>`;
+  const [, n, name] = id.split(':');
+  return `🤖${name ?? `Bot${n}`}`;
+};
 
 export const RULES_URL = encodeURI('https://github.com/eric0324/slack-werewolve/wiki/遊戲規則');
 export const ACTION_MS = 60_000;
@@ -701,7 +705,12 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
       const room = MAX_PLAYERS - s.players.length;
       const bots = s.players.filter((p) => isBot(p.id)).length;
-      for (let i = 1; i <= Math.min(action.count, room); i++) s.players.push({ id: `bot:${bots + i}`, alive: true });
+      const taken = new Set(s.players.filter((p) => isBot(p.id)).map((p) => p.id.split(':')[2]));
+      for (let i = 1; i <= Math.min(action.count, room); i++) {
+        const name = randomBotName(c.rng, taken);
+        taken.add(name);
+        s.players.push({ id: `bot:${bots + i}:${name}`, alive: true });
+      }
       if (room > 0) c.events.push(lobbyEvent(s));
       if (action.count > room) reply(c, action.user, '房間已滿。');
       return room > 0;

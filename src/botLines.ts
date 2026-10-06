@@ -146,3 +146,63 @@ export function botLine(kind: 'speech' | 'lastWords' | 'pk', target: string, rng
   const reason = rng() < 0.5 ? pick(REASONS, rng) : '';
   return pick(OPENERS, rng) + fill(pick(SUSPECTS, rng)) + reason + pick(CLOSERS, rng);
 }
+
+// bot 的中二名字：形容詞 + 名詞。不能有角色相關的字（狼、預言、女巫、獵、騎士、村民）、空白和冒號。
+const NAME_ADJECTIVES = [
+  '漆黑的',
+  '終焉之',
+  '被封印的',
+  '深淵的',
+  '永劫的',
+  '虛無的',
+  '煉獄的',
+  '孤高的',
+  '禁忌的',
+  '瞬殺的',
+  '不敗的',
+  '混沌的',
+  '傳說中的',
+  '宿命的',
+  '覺醒的',
+  '加班中的',
+  '沒睡飽的',
+  '剛下班的',
+  '手機沒電的',
+  '吃不飽的',
+  '迷路的',
+  '社恐的',
+  '月底沒錢的',
+  '想放假的',
+];
+
+const NAME_NOUNS = [
+  '墮天使',
+  '右手',
+  '魔眼',
+  '支配者',
+  '吟遊詩人',
+  '暗殺者',
+  '鍊金術師',
+  '審判者',
+  '放逐者',
+  '觀測者',
+  '流浪者',
+  '邪神',
+  '魔導士',
+  '斷罪者',
+  '守護者',
+  '魔王',
+  '黑龍',
+  '劍聖',
+  '影武者',
+  '契約者',
+];
+
+export function randomBotName(rng: Rng, taken: Set<string>): string {
+  for (let i = 0; i < 100; i++) {
+    const name = pick(NAME_ADJECTIVES, rng) + pick(NAME_NOUNS, rng);
+    if (!taken.has(name)) return name;
+  }
+  // 運氣太差一直抽到重複的，就加上編號
+  return `${pick(NAME_ADJECTIVES, rng)}${pick(NAME_NOUNS, rng)}${taken.size + 1}號`;
+}
