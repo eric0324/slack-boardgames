@@ -53,14 +53,14 @@ describe('parseCommand', () => {
 });
 
 describe('Slack：指令與房間', () => {
-  it('/werewolf new 在頻道貼出有「加入」「離開」按鈕的房間公告', async () => {
+  it('/werewolf new 在頻道貼出有「加入」「離開」「開始遊戲」按鈕的房間公告', async () => {
     const { host, calls } = setup();
     await host.command('C1', 'U1', 'alice', 'new');
     const post = calls.find((c) => c.method === 'chat.postMessage')!;
     expect(post.args.channel).toBe('C1');
     expect(post.args.text).toContain('<@U1>');
     const ids = buttonsOf(post).map((b: any) => b.action_id);
-    expect(ids).toEqual(['ww:join:0', 'ww:leave:1']);
+    expect(ids).toEqual(['ww:join:0', 'ww:leave:1', 'ww:start:2']);
   });
 
   it('按「加入」會更新同一則房間公告', async () => {
@@ -324,7 +324,7 @@ describe('Slack：再來一局', () => {
     expect(host.games.get('C1')).toMatchObject({ phase: 'lobby', host: 'U1' });
     const lobby = calls.at(-1)!;
     expect(lobby.method).toBe('chat.postMessage');
-    expect(buttonsOf(lobby).map((b: any) => b.action_id)).toEqual(['ww:join:0', 'ww:leave:1']);
+    expect(buttonsOf(lobby).map((b: any) => b.action_id)).toEqual(['ww:join:0', 'ww:leave:1', 'ww:start:2']);
   });
 });
 
@@ -407,5 +407,26 @@ describe('Slack：使用說明', () => {
     const help = (await helpFor('help')).args.text;
     expect((await helpFor('')).args.text).toBe(help);
     expect((await helpFor('dance')).args.text).toBe(help);
+  });
+});
+
+describe('Slack：開始遊戲按鈕', () => {
+  it('「開始遊戲」按鈕轉成 start action', () => {
+    expect(buttonAction('start', 'start', 'U1', 'C1')).toEqual({ type: 'start', user: 'U1' });
+  });
+
+  it('房主按下會開始遊戲；非房主和人數不足時只有按的人看到提示', async () => {
+    const { host, calls } = setup();
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(calls.at(-1)).toMatchObject({ method: 'chat.postEphemeral', args: { user: 'U1', text: expect.stringContaining('至少需要 6 人') } });
+
+    for (const u of ['U2', 'U3', 'U4', 'U5', 'U6']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U2', 'U2');
+    expect(calls.at(-1)).toMatchObject({ method: 'chat.postEphemeral', args: { user: 'U2', text: '只有房主可以開始遊戲。' } });
+    expect(host.games.get('C1')!.phase).toBe('lobby');
+
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(host.games.get('C1')!.phase).toBe('night');
   });
 });

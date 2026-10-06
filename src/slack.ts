@@ -62,6 +62,7 @@ export function buttonAction(kind: string, value: string, user: string, channel 
   switch (kind) {
     case 'join':
     case 'leave':
+    case 'start':
       return { type: kind, user };
     case 'wolfKill':
       return { type: 'wolfVote', user, target: value };
@@ -247,7 +248,11 @@ export class GameHost {
         const text = `狼人殺房間（房主 ${mention(e.host)}）\n玩家（${e.players.length}/${MAX_PLAYERS}）：${e.players.map(mention).join(' ')}`;
         const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text } }];
         if (e.open) {
-          const elements = [button('join', 0, '加入', channel, 'join'), button('leave', 1, '離開', channel, 'leave')];
+          const elements = [
+            button('join', 0, '加入', channel, 'join'),
+            button('leave', 1, '離開', channel, 'leave'),
+            { ...button('start', 2, '開始遊戲', channel, 'start'), style: 'primary' },
+          ];
           blocks.push({ type: 'actions', elements });
         }
         const ts = this.lobbyTs.get(channel);
