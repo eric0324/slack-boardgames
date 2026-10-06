@@ -199,3 +199,94 @@ describe('role-assignment: 狼人互相認識', () => {
     for (const w of ['p1', 'p2', 'p3']) expect((chat as { text: string }).text).toContain(`<@${w}>`);
   });
 });
+
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const timerIds = (events: GameEvent[]) =>
+  events.filter((e) => e.type === 'startTimer').map((e) => (e as { id: number }).id);
+const wolfChatText = (events: GameEvent[]) =>
+  events.filter((e) => e.type === 'wolfChat').map((e) => (e as { text: string }).text).join('\n');
+
+describe('night-phase: 夜晚流程與時限', () => {
+  it('天黑公告，狼人和預言家收到行動提示，計時 60 秒', () => {
+    const { events } = started(8);
+    expect(events).toContainEqual({ type: 'announce', text: expect.stringContaining('第 1 夜') });
+    const [wolf] = prompts(events, 'wolfKill');
+    expect(wolf.audience).toBe('wolves');
+    expect(wolf.options).toHaveLength(8);
+    const [seer] = prompts(events, 'seerCheck');
+    expect(seer).toMatchObject({ audience: 'user', user: 'p4' });
+    expect(seer.options.map((o) => o.value)).not.toContain('p4');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'startTimer', ms: 60_000 }));
+  });
+
+  it('不是目前計時器的 timeout 會被忽略', () => {
+    const { state } = started(8);
+    const { state: after, events } = run([{ type: 'timeout', id: 999 }], state);
+    expect(after).toBe(state);
+    expect(events).toEqual([]);
+  });
+});
+
+describe('night-phase: 狼人擊殺', () => {
+  it('狼人意見一致，立刻決定目標並在狼人對話公布', () => {
+    const { state, events } = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: 'p7' },
+        { type: 'wolfVote', user: 'p2', target: 'p7' },
+        { type: 'wolfVote', user: 'p3', target: 'p7' },
+      ],
+      started(8).state,
+    );
+    expect(state.night!.wolfTarget).toBe('p7');
+    expect(wolfChatText(events)).toContain('<@p7>');
+  });
+
+  it('還有狼人沒選時不會決定目標', () => {
+    const { state } = run([{ type: 'wolfVote', user: 'p1', target: 'p7' }], started(8).state);
+    expect(state.night!.wolfTarget).toBeUndefined();
+  });
+
+  it('狼人可以改選', () => {
+    const { state } = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: 'p7' },
+        { type: 'wolfVote', user: 'p1', target: 'p8' },
+        { type: 'wolfVote', user: 'p2', target: 'p8' },
+        { type: 'wolfVote', user: 'p3', target: 'p8' },
+      ],
+      started(8).state,
+    );
+    expect(state.night!.wolfTarget).toBe('p8');
+  });
+
+  it('狼人意見平手時，從平手的人裡隨機選一位', () => {
+    const s = run([{ type: 'wolfVote', user: 'p1', target: 'p5' }], started(6).state).state;
+    const last: Action = { type: 'wolfVote', user: 'p2', target: 'p6' };
+    const a = applyAction(s, last, () => 0).state.night!.wolfTarget;
+    const b = applyAction(s, last, () => 0.99999).state.night!.wolfTarget;
+    expect(new Set([a, b])).toEqual(new Set(['p5', 'p6']));
+  });
+
+  it('時限到了沒有狼人選擇，當晚沒有擊殺目標', () => {
+    const { state, events } = started(8);
+    const [id] = timerIds(events);
+    const after = run([{ type: 'timeout', id }], state);
+    expect(after.state.night!.wolfTarget).toBeNull();
+    expect(wolfChatText(after.events)).toContain('沒有擊殺目標');
+  });
+
+  it('時限到了只有部分狼人選擇，用已經選的票決定', () => {
+    const { state, events } = started(8);
+    const [id] = timerIds(events);
+    const after = run([{ type: 'wolfVote', user: 'p1', target: 'p8' }, { type: 'timeout', id }], state);
+    expect(after.state.night!.wolfTarget).toBe('p8');
+  });
+
+  it('非狼人送出擊殺選擇會被忽略', () => {
+    const { state } = started(8);
+    const { state: after, events } = run([{ type: 'wolfVote', user: 'p7', target: 'p8' }], state);
+    expect(after).toBe(state);
+    expect(events).toEqual([]);
+  });
+});
