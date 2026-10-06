@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { botLine, randomBotName } from '../src/botLines.js';
-import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
+import { botLine, hunterReveal, randomBotName, seerClaim, witchReveal } from '../src/botLines.js';
+import { applyAction, checkWinner, chooseSeerTarget, dealRoles, isBot, isWolf as isWolfRole, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
 
@@ -1778,5 +1778,138 @@ describe('bot-players: bot 的顯示方式（隨機名字）', () => {
     const taken = new Set<string>();
     for (let i = 0; i < 30; i++) taken.add(randomBotName(() => 0, taken));
     expect(taken.size).toBe(30);
+  });
+});
+
+describe('bot-players: bot 需要的資訊（31.1）', () => {
+  it('記錄預言家的查驗結果', () => {
+    const { state } = run(
+      [
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+      ],
+      started(8).state,
+    );
+    expect(state.checks).toEqual([{ night: 1, target: 'p1', wolf: true }]);
+  });
+
+  it('記錄女巫的用藥', () => {
+    const saved = run([{ type: 'witchAct', user: 'p5', choice: 'save' }], wolvesKill('p7').state).state;
+    expect(saved.witchLog).toEqual([{ night: 1, saved: 'p7' }]);
+    const poisoned = run([{ type: 'witchAct', user: 'p5', choice: 'poison:p1' }], wolvesKill('p7').state).state;
+    expect(poisoned.witchLog).toEqual([{ night: 1, poisoned: 'p1' }]);
+  });
+
+  it('預言家 bot 優先查還沒查過的存活玩家', () => {
+    const s = started(8).state;
+    const checked: GameState = {
+      ...s,
+      checks: ['p1', 'p2', 'p3', 'p5', 'p6', 'p7'].map((target) => ({ night: 1, target, wolf: false })),
+    };
+    for (const r of [0, 0.5, 0.99999]) expect(chooseSeerTarget(checked, 'p4', () => r)).toBe('p8');
+  });
+});
+
+describe('bot-players: bot 依身分發言', () => {
+  // withBots：p1 真人狼人；bot1 狼人、bot2 預言家、bot3 女巫、bot4、bot5 村民
+  // rng 固定時狼人刀 bot5，女巫不用藥
+  const says = (events: GameEvent[], id: string) => announces(events).filter((t) => t.startsWith(`${mention(id)}：`));
+  const dawnFrom = (night: GameState, rng: () => number = () => 0.99999) =>
+    applyAction(night, { type: 'wolfVote', user: 'p1', target: night.night!.wolfVotes[botId(night, 1)] }, rng);
+  // 天亮後房主一路跳過發言直到進入投票，收集過程中所有的公告
+  const dayAll = (night: GameState, rng: () => number = () => 0.99999) => {
+    let r = dawnFrom(night, rng);
+    let events = [...r.events];
+    while (r.state.phase === 'speech' || r.state.phase === 'lastWords') {
+      r = applyAction(r.state, { type: 'skipSpeaker', user: 'p1' }, rng);
+      events = events.concat(r.events);
+    }
+    return { state: r.state, events };
+  };
+
+  it('預言家 bot 報出真實的查驗並懷疑查到的狼人，當天投給他', () => {
+    const night = withBots().state;
+    const seer = botId(night, 2);
+    const day = dayAll({ ...night, checks: [{ night: 1, target: 'p1', wolf: true }] });
+    expect(says(day.events, seer).join('\n')).toContain('我是預言家，第 1 晚查了 <@p1>，是狼人');
+    expect(day.state.suspects[seer]).toBe('p1');
+    expect(day.state.phase).toBe('vote');
+    expect(day.state.votes[seer]).toBe('p1');
+  });
+
+  it('預言家 bot 第一夜死亡時，遺言報出查驗', () => {
+    const night = withBots().state;
+    const seer = botId(night, 2);
+    const patched = { ...night, checks: [{ night: 1, target: 'p1', wolf: true }] };
+    const day = applyAction(patched, { type: 'wolfVote', user: 'p1', target: seer }, () => 0.99999);
+    expect(isDead(day.state, seer)).toBe(true);
+    expect(says(day.events, seer).join('\n')).toContain('我是預言家，第 1 晚查了 <@p1>，是狼人');
+  });
+
+  it('好人 bot 跟著 bot 報的查殺懷疑並投票', () => {
+    const night = withBots().state;
+    const villager = botId(night, 4);
+    const day = dayAll({ ...night, claims: [{ by: botId(night, 2), night: 1, target: 'p1', wolf: true }] });
+    expect(day.state.suspects[villager]).toBe('p1');
+    expect(day.state.votes[villager]).toBe('p1');
+  });
+
+  it('被報過是好人的玩家不會被好人 bot 懷疑', () => {
+    const night = withBots().state;
+    const goods = [botId(night, 1), botId(night, 2), botId(night, 3), botId(night, 4)];
+    const claims = goods.map((target) => ({ by: botId(night, 2), night: 1, target, wolf: false }));
+    const day = dayAll({ ...night, claims });
+    expect(day.state.suspects[botId(night, 4)]).toBe('p1');
+  });
+
+  it('狼人 bot 悍跳預言家，把一位非狼人說成狼人', () => {
+    const night = withBots().state;
+    const wolf = botId(night, 1);
+    const day = dayAll(night, () => 0.1);
+    expect(day.state.fakeSeer).toBe(wolf);
+    const line = says(day.events, wolf).join('\n');
+    const m = /我是預言家，第 1 晚查了 (\S+)，是狼人/.exec(line)!;
+    expect(m).not.toBeNull();
+    const target = day.state.players.find((p) => mention(p.id) === m[1])!;
+    expect(isWolfRole(target.role)).toBe(false);
+  });
+
+  it('神職 bot 被懷疑時亮身分', () => {
+    const night = withBots().state;
+    const witch = botId(night, 3);
+    // 有 bot 報女巫是狼人 → 先發言的好人 bot 懷疑女巫 → 女巫亮身分
+    const day = dayAll({ ...night, claims: [{ by: botId(night, 2), night: 1, target: witch, wolf: true }] });
+    expect(says(day.events, witch).join('\n')).toContain('我是女巫');
+  });
+
+  it('身分台詞的格式', () => {
+    expect(witchReveal([{ night: 1, saved: '@D' }])).toContain('我是女巫，第 1 晚救了 @D');
+    expect(witchReveal([])).toContain('我是女巫');
+    expect(hunterReveal()).toContain('我是獵人');
+    expect(seerClaim([{ night: 2, target: '@C', wolf: false }])).toContain('我是預言家，第 2 晚查了 @C，是好人');
+  });
+});
+
+describe('bot-players: 狼人 bot 不懷疑也不投隊友（整局檢查）', () => {
+  it('12 人局 20 組隨機種子，狼人 bot 的懷疑和投票都不是狼人', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      let x = seed;
+      const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+      let s = applyAction(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyAction(s, { type: 'addBot', user: 'p1', count: 11 }, r).state;
+      s = applyAction(s, { type: 'start', user: 'p1' }, r).state;
+      for (let step = 0; step < 500 && s.phase !== 'ended'; step++) {
+        const roleOfId = (id: string) => s.players.find((p) => p.id === id)!.role;
+        for (const [bot, sus] of Object.entries(s.suspects)) {
+          if (isWolfRole(roleOfId(bot))) expect(isWolfRole(roleOfId(sus)), `seed ${seed}`).toBe(false);
+        }
+        for (const [voter, target] of Object.entries(s.votes)) {
+          if (isBot(voter) && isWolfRole(roleOfId(voter)) && target !== 'abstain') {
+            expect(isWolfRole(roleOfId(target)), `seed ${seed}`).toBe(false);
+          }
+        }
+        s = applyAction(s, { type: 'timeout', id: Object.values(s.timers)[0]! }, r).state;
+      }
+      expect(s.phase, `seed ${seed}`).toBe('ended');
+    }
   });
 });
