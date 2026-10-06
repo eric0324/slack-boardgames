@@ -323,3 +323,9 @@ describe('Slack：再來一局', () => {
     expect(buttonsOf(lobby).map((b: any) => b.action_id)).toEqual(['ww:join:0', 'ww:leave:1']);
   });
 });
+
+describe('Slack：騎士決鬥', () => {
+  it('決鬥按鈕轉成 duel action', () => {
+    expect(buttonAction('duel', 'U2', 'U7', 'C1')).toEqual({ type: 'duel', user: 'U7', target: 'U2' });
+  });
+});
