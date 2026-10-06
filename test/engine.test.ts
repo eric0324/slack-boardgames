@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
+import { botLine } from '../src/botLines.js';
+import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
 
@@ -417,6 +418,7 @@ const fullNight = (kill: string, witch: string) =>
     started(8).state,
   );
 const isDead = (s: GameState, id: string) => !s.players.find((p) => p.id === id)!.alive;
+const isAlive = (s: GameState, id: string) => !isDead(s, id);
 // 房主把遺言都跳過
 const skipLastWords = (r: { state: GameState; events: GameEvent[] }) => {
   while (r.state.phase === 'lastWords') r = run([{ type: 'skipSpeaker', user: 'p1' }], r.state);
@@ -650,10 +652,10 @@ describe('day-phase: 輪流發言', () => {
     expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
   });
 
-  it('輪到 bot 時公告「過」，立刻換下一位', () => {
+  it('輪到 bot 時說一句台詞，立刻換下一位', () => {
     const { state } = withBots();
     const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
-    expect(announces(day.events)).toContainEqual(expect.stringMatching(/^🤖Bot\d：過。$/));
+    expect(announces(day.events).some((t) => /^🤖Bot\d：.+/.test(t) && !t.endsWith('：過。'))).toBe(true);
     expect(day.state.speaker).toBe('p1');
   });
 
@@ -1266,10 +1268,13 @@ describe('day-phase: 遺言', () => {
     expect(ephemeralTo(after.events, 'p8')).toMatchObject({ text: expect.stringContaining('不是你的發言時間') });
   });
 
-  it('bot 沒有遺言', () => {
+  it('bot 會講一句遺言', () => {
     const { state } = withBots();
-    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
-    expect(announces(day.events)).toContainEqual(expect.stringMatching(/^🤖Bot\d：（沒有遺言）$/));
+    const dead = state.night!.wolfVotes['bot:1'];
+    const day = run([{ type: 'wolfVote', user: 'p1', target: dead }], state);
+    const words = announces(day.events).find((t) => t.startsWith(`${mention(dead)}：`))!;
+    expect(words).toBeDefined();
+    expect(words).not.toContain('（沒有遺言）');
   });
 });
 
@@ -1623,5 +1628,87 @@ describe('player-stats: 記錄遊戲結果（engine）', () => {
 
   it('取消的遊戲不送紀錄', () => {
     expect(record(run([{ type: 'cancel', user: 'p1' }], started(6).state).events)).toBeUndefined();
+  });
+});
+
+describe('bot-players: bot 的發言台詞', () => {
+  // withBots：p1 真人狼人 + 5 個 bot；p1 跟著 bot 狼人刀人後天亮
+  const botDay = () => {
+    const { state } = withBots();
+    return run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+  };
+
+  it('bot 輪流發言時提到一位不是自己的存活玩家，並記住懷疑的人', () => {
+    const { state, events } = botDay();
+    for (const [bot, suspect] of Object.entries(state.suspects)) {
+      expect(isBot(bot)).toBe(true);
+      expect(suspect).not.toBe(bot);
+      expect(isAlive(state, suspect)).toBe(true);
+      const line = announces(events).find((t) => t.startsWith(`${mention(bot)}：`) && t.includes(mention(suspect)));
+      expect(line).toBeDefined();
+    }
+    expect(Object.keys(state.suspects).length).toBeGreaterThan(0);
+  });
+
+  it('bot 投給它懷疑的人', () => {
+    const day = botDay().state;
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], day).state;
+    for (const [bot, suspect] of Object.entries(day.suspects)) {
+      if (vote.candidates.includes(suspect)) expect(vote.votes[bot]).toBe(suspect);
+    }
+  });
+
+  it('懷疑的人已經不是候選人：隨機投給其他可以投的人', () => {
+    const day = botDay().state;
+    const gone = Object.values(day.suspects)[0];
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], kill(day, gone)).state;
+    for (const bot of Object.keys(day.suspects)) {
+      if (!isAlive(vote, bot)) continue;
+      expect(vote.votes[bot]).not.toBe(gone);
+      expect(vote.candidates).toContain(vote.votes[bot]);
+    }
+  });
+
+  it('bot 的 PK 發言替自己辯護並提到另一位平票的玩家', () => {
+    // 7 位真人 + 1 個 bot（bot:1 是村民）
+    const game = run([{ type: 'addBot', user: 'p1', count: 1 }, { type: 'start', user: 'p1' }], lobbyWith(7).state).state;
+    const day = skipLastWords(
+      run(
+        [
+          ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p7' }) as Action),
+          { type: 'seerCheck', user: 'p4', target: 'p1' },
+          { type: 'witchAct', user: 'p5', choice: 'skip' },
+        ],
+        game,
+      ),
+    ).state;
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], day).state;
+    const other = vote.votes['bot:1'];
+    // bot:1 和 other 各 3 票平手
+    const humans = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].filter((h) => h !== other);
+    const plan: [string, string][] = [
+      ...humans.slice(0, 3).map((h) => [h, 'bot:1'] as [string, string]),
+      ...humans.slice(3, 5).map((h) => [h, other] as [string, string]),
+      [other, 'abstain'],
+    ];
+    const pk = run(votes(plan), vote);
+    expect(pk.state.phase).toBe('pkSpeech');
+    const afterOther = run([{ type: 'endSpeech', user: other }], pk.state);
+    const line = announces(afterOther.events).find((t) => t.startsWith('🤖Bot1：'))!;
+    expect(line).toContain(mention(other));
+    expect(afterOther.state.phase).toBe('pkVote');
+  });
+
+  it('台詞不會出現任何角色名稱', () => {
+    const names = Object.values(ROLE_NAME);
+    for (let seed = 1; seed <= 200; seed++) {
+      let x = seed;
+      const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+      for (const kind of ['speech', 'lastWords', 'pk'] as const) {
+        const line = botLine(kind, 'TARGET', r);
+        expect(line).toContain('TARGET');
+        for (const n of names) expect(line).not.toContain(n);
+      }
+    }
   });
 });

@@ -1,3 +1,5 @@
+import { botLine } from './botLines.js';
+
 // 狼人殺遊戲引擎：純邏輯，不碰任何 I/O。
 // applyAction(state, action, rng) → { state, events }，由 adapter 把 events 轉成 Slack 訊息。
 
@@ -79,6 +81,7 @@ export interface GameState {
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
   winner?: 'good' | 'wolves'; // 分出勝負後才有；取消的遊戲沒有
   knightUsed: boolean; // 騎士是否已經決鬥過
+  suspects: Record<string, string>; // bot → 當天發言時懷疑的玩家（投票時優先投他）
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -324,7 +327,9 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
     const voter = s.voters.find((v) => isBot(v) && isAlive(s, v) && !s.votes[v]);
     if (voter) {
       const choices = s.candidates.filter((id) => id !== voter);
-      return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
+      const suspect = s.suspects[voter];
+      const target = choices.includes(suspect) ? suspect : choices.length ? pick(choices, rng) : 'abstain';
+      return { type: 'dayVote', user: voter, target };
     }
   }
   if (s.phase === 'hunter' && s.shooter && isBot(s.shooter.id)) {
@@ -380,7 +385,8 @@ function nextLastWords(c: Ctx) {
   for (let id = s.lastWords.shift(); id; id = s.lastWords.shift()) {
     s.speaker = id;
     if (isBot(id)) {
-      c.events.push({ type: 'announce', text: `${mention(id)}：（沒有遺言）` });
+      const others = alive(s).map((p) => p.id);
+      c.events.push({ type: 'announce', text: `${mention(id)}：${botLine('lastWords', mention(pick(others, c.rng)), c.rng)}` });
       continue;
     }
     c.events.push({
@@ -458,10 +464,21 @@ function startSpeeches(c: Ctx) {
   const living = alive(s).map((p) => p.id);
   const first = Math.floor(c.rng() * living.length);
   s.phase = 'speech';
+  s.suspects = {};
   s.speakers = [...living.slice(first), ...living.slice(0, first)];
   c.events.push({ type: 'announce', text: `💬 開始輪流發言，順序：${s.speakers.map(mention).join(' → ')}` });
   promptKnight(c);
   nextSpeaker(c);
+}
+
+// 輪流發言時懷疑一位存活玩家並記下來；PK 時替自己辯護、提到另一位平票的人
+function botSpeak(c: Ctx, id: string) {
+  const s = c.s;
+  const pk = s.phase === 'pkSpeech';
+  const pool = (pk ? s.candidates : alive(s).map((p) => p.id)).filter((p) => p !== id);
+  const target = pick(pool, c.rng);
+  if (!pk) s.suspects[id] = target;
+  c.events.push({ type: 'announce', text: `${mention(id)}：${botLine(pk ? 'pk' : 'speech', mention(target), c.rng)}` });
 }
 
 // 騎士還活著、還沒決鬥過時，私訊決鬥按鈕
@@ -498,14 +515,14 @@ function duel(c: Ctx, knight: string, target: string) {
   if (s.phase === 'speech' && s.speaker === knight) nextSpeaker(c);
 }
 
-// 換下一位發言者；bot 直接過，沒有人了就進入下一個階段
+// 換下一位發言者；bot 說一句台詞就換人，沒有人了就進入下一個階段
 function nextSpeaker(c: Ctx) {
   const s = c.s;
   s.timers = {};
   for (let id = s.speakers.shift(); id; id = s.speakers.shift()) {
     s.speaker = id;
     if (isBot(id)) {
-      c.events.push({ type: 'announce', text: `${mention(id)}：過。` });
+      botSpeak(c, id);
       continue;
     }
     c.events.push({
@@ -870,6 +887,7 @@ function createLobby(prev: GameState | undefined, host: string, channel: string)
     speakers: [],
     lastWords: [],
     knightUsed: false,
+    suspects: {},
     votes: {},
     candidates: [],
     voters: [],
