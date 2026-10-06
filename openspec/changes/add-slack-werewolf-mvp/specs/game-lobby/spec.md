@@ -81,6 +81,17 @@
 - **WHEN** 輪流發言時，不在玩家名單上的使用者 X 按下「結束發言」
 - **THEN** 發言者不變，只有 X 看到「你不在這局遊戲中」
 
+### Requirement: 使用說明
+使用者輸入 `/werewolf help`、只輸入 `/werewolf`，或輸入不認識的子指令時，系統 SHALL 回覆使用說明，只讓這位使用者看到。使用說明 SHALL 以條列方式呈現，每個指令一行，包含指令、誰可以用和一句說明，最後附上 wiki「指令」頁的連結。
+
+#### Scenario: 查看使用說明
+- **WHEN** 使用者輸入 `/werewolf help`
+- **THEN** 只有這位使用者看到條列的使用說明，每個指令（new、addbot、removebot、start、next、vote、cancel、stats）各一行，最後有 wiki 指令頁的連結
+
+#### Scenario: 不認識的子指令
+- **WHEN** 使用者輸入 `/werewolf dance`
+- **THEN** 只有這位使用者看到同一份使用說明
+
 ### Requirement: 一個頻道同時只有一局
 系統 SHALL 以頻道為單位分開管理遊戲。不同頻道 SHALL 可以同時各自進行一局，彼此的狀態互不影響。
 
