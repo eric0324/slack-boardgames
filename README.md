@@ -27,7 +27,13 @@
          - chat:write
          - im:write
          - mpim:write
+         - channels:history
+         - groups:history
    settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
      interactivity:
        is_enabled: true
      socket_mode_enabled: true
@@ -49,6 +55,8 @@ npm install
 npm start      # 用 Socket Mode 連上 Slack，不需要公開 URL
 npm test       # 執行測試
 ```
+
+bot 會讀取遊戲頻道裡真人打的字（例如「我是預言家，查殺 @某人」），讓 bot 玩家參考；所以需要 `channels:history`、`groups:history` 權限和 `message.*` event。訊息只在 bot 程式裡比對，不會送到任何外部服務。
 
 戰績會存在 `data/stats.db`（SQLite），可以用環境變數 `STATS_DB` 改位置；換電腦跑 bot 時記得一起搬過去。
 

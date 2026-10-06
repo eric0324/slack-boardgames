@@ -1,3 +1,4 @@
+import { parseChat } from './chatParser.js';
 import { botLine, counterClaim, followClaim, hunterReveal, knightReveal, randomBotName, seerClaim, witchReveal } from './botLines.js';
 
 // 狼人殺遊戲引擎：純邏輯，不碰任何 I/O。
@@ -90,6 +91,8 @@ export interface GameState {
   claims: { by: string; night: number; target: string; wolf: boolean }[]; // bot 公開報過的查驗（可能是假的）
   fakeSeer?: string; // 悍跳預言家的狼人 bot
   fakeSeerDecided: boolean; // 第一天是否已經決定過要不要悍跳
+  seerClaimers: string[]; // 在頻道自稱過預言家的真人
+  godClaims: Record<string, 'witch' | 'hunter' | 'knight'>; // 在頻道自稱神職的真人
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -118,6 +121,7 @@ export type Action =
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
   | { type: 'duel'; user: string; target: string }
+  | { type: 'chat'; user: string; text: string } // 真人在頻道打的字
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -498,6 +502,44 @@ function startSpeeches(c: Ctx) {
 }
 
 // 輪流發言時懷疑一位存活玩家並記下來；PK 時替自己辯護、提到另一位平票的人
+// 真人在頻道打的字：比對出查驗、懷疑、神職自稱，讓 bot 參考。只讀不回應
+const DAY_PHASES: Phase[] = ['lastWords', 'hunter', 'speech', 'vote', 'pkSpeech', 'pkVote'];
+
+function readChat(s: GameState, user: string, text: string): boolean {
+  if (!DAY_PHASES.includes(s.phase) || isBot(user)) return false;
+  const speaker = s.players.find((p) => p.id === user);
+  if (!speaker || (!speaker.alive && !(s.phase === 'lastWords' && s.speaker === user))) return false;
+  const info = parseChat(
+    text,
+    s.players.map((p) => p.id),
+  );
+  const others = (ids: string[]) => ids.filter((id) => id !== user);
+  let changed = false;
+  if (info.seerClaim && !s.seerClaimers.includes(user)) {
+    s.seerClaimers.push(user);
+    changed = true;
+  }
+  if (s.seerClaimers.includes(user)) {
+    const before = s.claims.length;
+    recordClaims(s, user, [
+      ...others(info.wolf).map((target) => ({ night: s.day, target, wolf: true })),
+      ...others(info.good).map((target) => ({ night: s.day, target, wolf: false })),
+    ]);
+    changed ||= s.claims.length > before;
+  } else {
+    const suspected = others([...info.wolf, ...info.suspect]).at(-1);
+    if (suspected) {
+      s.suspects[user] = suspected;
+      changed = true;
+    }
+  }
+  if (info.godClaim) {
+    s.godClaims[user] = info.godClaim;
+    changed = true;
+  }
+  return changed;
+}
+
 // bot 的遺言：預言家（或悍跳的狼人）報查驗，其他人依身分懷疑一位存活玩家
 function botLastWords(s: GameState, id: string, rng: Rng): string {
   const role = player(s, id).role!;
@@ -570,7 +612,7 @@ function fakeCheck(s: GameState, wolf: string, rng: Rng): string | undefined {
   const used = new Set(s.claims.filter((k) => k.by === wolf).map((k) => k.target));
   const goods = alive(s).filter((p) => !isWolf(p.role) && !used.has(p.id)).map((p) => p.id);
   if (!goods.length) return undefined;
-  const rivals = goods.filter((id) => s.claims.some((k) => k.by === id));
+  const rivals = goods.filter((id) => s.claims.some((k) => k.by === id) || s.seerClaimers.includes(id));
   const target = pick(rivals.length ? rivals : goods, rng);
   s.claims.push({ by: wolf, night: s.day, target, wolf: true });
   return target;
@@ -581,7 +623,7 @@ function goodSuspect(s: GameState, id: string, pool: string[], rng: Rng) {
   const others = pool.filter((p) => p !== id);
   const wolves = [...new Set(s.claims.filter((k) => k.wolf).map((k) => k.target))].filter((t) => others.includes(t));
   if (wolves.length) return { target: pick(wolves, rng), followed: true };
-  const good = new Set(s.claims.filter((k) => !k.wolf).map((k) => k.target));
+  const good = new Set([...s.claims.filter((k) => !k.wolf).map((k) => k.target), ...Object.keys(s.godClaims)]);
   const rest = others.filter((p) => !good.has(p));
   return { target: pick(rest.length ? rest : others, rng), followed: false };
 }
@@ -896,6 +938,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       startVote(c);
       return true;
     }
+    case 'chat':
+      return readChat(s, action.user, action.text);
     case 'duel': {
       if (!aliveWith(s, 'knight').some((p) => p.id === action.user) || s.knightUsed) return false;
       if (s.phase !== 'speech') return reply(c, action.user, '現在不能決鬥。');
@@ -1018,6 +1062,8 @@ function createLobby(prev: GameState | undefined, host: string, channel: string)
     witchLog: [],
     claims: [],
     fakeSeerDecided: false,
+    seerClaimers: [],
+    godClaims: {},
     votes: {},
     candidates: [],
     voters: [],
