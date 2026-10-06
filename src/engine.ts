@@ -243,7 +243,7 @@ function promptWitch(c: Ctx) {
   const opts: Option[] = [];
   if (canSave(s, witch.id)) opts.push({ value: 'save', label: '使用解藥' });
   if (s.potions.poison) {
-    for (const p of alive(s)) if (p.id !== witch.id) opts.push({ value: `poison:${p.id}`, label: p.id });
+    for (const p of alive(s)) if (p.id !== witch.id) opts.push({ value: `poison:${p.id}`, label: `毒 ${p.id}` });
   }
   opts.push({ value: 'skip', label: '不使用' });
   c.events.push({ type: 'prompt', kind: 'witch', audience: 'user', user: witch.id, text: lines.join('\n'), options: opts });

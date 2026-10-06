@@ -98,3 +98,64 @@ describe('Slack：指令與房間', () => {
     expect(host.games.get('C2')!.players.map((p) => p.id)).toEqual(['U9']);
   });
 });
+
+// 6 人局：U1、U2 狼人，U3 預言家，U4 女巫，U5、U6 村民
+const NAMES: Record<string, string> = { U1: 'alice', U2: 'bob', U3: 'carol', U4: 'dave', U5: 'erin', U6: 'frank' };
+async function startedHost() {
+  const ctx = setup();
+  await ctx.host.command('C1', 'U1', 'alice', 'new');
+  for (const u of ['U2', 'U3', 'U4', 'U5', 'U6']) await ctx.host.button('ww:join:0', 'C1|join', u, NAMES[u]);
+  await ctx.host.command('C1', 'U1', 'alice', 'start');
+  return ctx;
+}
+const postsTo = (calls: Call[], channel: string) =>
+  calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === channel);
+
+describe('Slack：event 轉換', () => {
+  it('dm：開啟私訊再發送身分', async () => {
+    const { calls } = await startedHost();
+    expect(calls).toContainEqual({ method: 'conversations.open', args: { users: 'U3' } });
+    expect(postsTo(calls, 'D:U3').map((c) => c.args.text)).toContainEqual(expect.stringContaining('預言家'));
+  });
+
+  it('wolfChat：開啟狼人的多人私訊，擊殺提示也送到同一個對話', async () => {
+    const { calls } = await startedHost();
+    const opens = calls.filter((c) => c.method === 'conversations.open' && c.args.users === 'U1,U2');
+    expect(opens).toHaveLength(1);
+    const wolfPosts = postsTo(calls, 'D:U1,U2');
+    expect(wolfPosts[0].args.text).toContain('<@U1>');
+    expect(buttonsOf(wolfPosts.at(-1)!).map((b: any) => b.value)).toContain('C1|U5');
+  });
+
+  it('prompt（user）：按鈕用玩家名字當文字，value 帶著遊戲頻道', async () => {
+    const { calls } = await startedHost();
+    const seerPrompt = postsTo(calls, 'D:U3').find((c) => buttonsOf(c).length)!;
+    const btns = buttonsOf(seerPrompt);
+    expect(btns[0]).toMatchObject({ action_id: 'ww:seerCheck:0', value: 'C1|U1', text: { text: 'alice' } });
+  });
+
+  it('prompt（channel）：投票按鈕貼在遊戲頻道', async () => {
+    const { host, calls } = await startedHost();
+    for (const a of [
+      { type: 'wolfVote', user: 'U1', target: 'U5' },
+      { type: 'wolfVote', user: 'U2', target: 'U5' },
+      { type: 'seerCheck', user: 'U3', target: 'U1' },
+      { type: 'witchAct', user: 'U4', choice: 'skip' },
+      { type: 'endDiscussion', user: 'U1' },
+    ] as const) {
+      await host.dispatch('C1', a);
+    }
+    const vote = postsTo(calls, 'C1').at(-1)!;
+    const btns = buttonsOf(vote);
+    expect(btns.map((b: any) => b.text.text)).toEqual(['alice', 'bob', 'carol', 'dave', 'frank', '棄票']);
+    expect(btns[0].action_id).toBe('ww:dayVote:0');
+  });
+
+  it('女巫的毒藥選項也顯示玩家名字', async () => {
+    const { host, calls } = await startedHost();
+    await host.dispatch('C1', { type: 'wolfVote', user: 'U1', target: 'U5' });
+    await host.dispatch('C1', { type: 'wolfVote', user: 'U2', target: 'U5' });
+    const witchPrompt = postsTo(calls, 'D:U4').at(-1)!;
+    expect(buttonsOf(witchPrompt).map((b: any) => b.text.text)).toContain('毒 alice');
+  });
+});

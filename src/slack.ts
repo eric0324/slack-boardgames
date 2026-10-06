@@ -47,6 +47,8 @@ export class GameHost {
   games = new Map<string, GameState>();
   private lobbyTs = new Map<string, string>();
   private names = new Map<string, string>();
+  private dms = new Map<string, string>(); // user → 私訊頻道
+  private wolfChats = new Map<string, { users: string; id: string }>(); // 遊戲頻道 → 狼人多人私訊
   private queue: Promise<void> = Promise.resolve();
   private rng: Rng;
 
@@ -88,9 +90,52 @@ export class GameHost {
     return this.queue;
   }
 
+  private async dm(user: string): Promise<string> {
+    let id = this.dms.get(user);
+    if (!id) {
+      id = (await this.client.conversations.open({ users: user })).channel.id as string;
+      this.dms.set(user, id);
+    }
+    return id;
+  }
+
+  private async wolfChat(channel: string, wolves: string[]): Promise<string> {
+    const users = wolves.join(',');
+    const cached = this.wolfChats.get(channel);
+    if (cached?.users === users) return cached.id;
+    const id = (await this.client.conversations.open({ users })).channel.id as string;
+    this.wolfChats.set(channel, { users, id });
+    return id;
+  }
+
+  // 把選項文字裡的玩家 id 換成名字（按鈕只能放純文字，不能用 <@id>）
+  private label(text: string) {
+    return text
+      .split(' ')
+      .map((t) => this.names.get(t) ?? t)
+      .join(' ');
+  }
+
   private async send(channel: string, e: GameEvent) {
     const chat = this.client.chat;
     switch (e.type) {
+      case 'dm':
+        await chat.postMessage({ channel: await this.dm(e.to), text: e.text });
+        return;
+      case 'wolfChat':
+        await chat.postMessage({ channel: await this.wolfChat(channel, e.wolves), text: e.text });
+        return;
+      case 'prompt': {
+        const target =
+          e.audience === 'channel' ? channel : e.audience === 'wolves' ? this.wolfChats.get(channel)!.id : await this.dm(e.user!);
+        const elements = e.options.map((o, i) => button(e.kind, i, this.label(o.label), channel, o.value));
+        const blocks = [
+          { type: 'section', text: { type: 'mrkdwn', text: e.text } },
+          { type: 'actions', elements },
+        ];
+        await chat.postMessage({ channel: target, text: e.text, blocks });
+        return;
+      }
       case 'announce':
         await chat.postMessage({ channel, text: e.text });
         return;
