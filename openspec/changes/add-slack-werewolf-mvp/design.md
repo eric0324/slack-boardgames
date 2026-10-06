@@ -53,7 +53,7 @@ Node.js 是單執行緒，`applyAction` 是同步函式，所以同一局的多�
 
 | 資訊 | 管道 | 原因 |
 |---|---|---|
-| 身分、預言家查驗結果、女巫和獵人的提示 | bot 私訊（`conversations.open` + `chat.postMessage`） | 需要能回頭查看 |
+| 身分、預言家查驗結果、女巫、狼王和騎士的提示 | bot 私訊（`conversations.open` + `chat.postMessage`） | 需要能回頭查看 |
 | 狼人密談、擊殺選擇 | 多人私訊（MPIM，`conversations.open` 帶入所有狼人） | 不需要建立和清理 private channel，只要 `mpim:write` |
 | 錯誤提示、投票確認 | ephemeral | 臨時訊息，消失也沒關係 |
 
@@ -71,7 +71,7 @@ test/
   slack.test.ts  # 用假的 Slack client 驗證 event 轉換
 ```
 
-`engine.ts` 最後大約 575 行。因為各階段之間互相呼叫（結算 → 天亮 → 獵人 → 討論 → 投票 → 夜晚），拆檔反而要來回跳著看，所以維持單一檔案。
+`engine.ts` 最後大約 575 行。因為各階段之間互相呼叫（結算 → 天亮 → 遺言 → 開槍 → 輪流發言 → 投票 → 夜晚），拆檔反而要來回跳著看，所以維持單一檔案。
 
 ### 6. 技術選擇
 

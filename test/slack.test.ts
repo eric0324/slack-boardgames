@@ -173,7 +173,7 @@ describe('Slack：遊戲按鈕與計時', () => {
     expect(buttonAction('witch', 'poison:U1', 'U4')).toEqual({ type: 'witchAct', user: 'U4', choice: 'poison:U1' });
     expect(buttonAction('dayVote', 'abstain', 'U2')).toEqual({ type: 'dayVote', user: 'U2', target: 'abstain' });
     expect(buttonAction('pkVote', 'U1', 'U2')).toEqual({ type: 'dayVote', user: 'U2', target: 'U1' });
-    expect(buttonAction('hunterShoot', 'none', 'U6')).toEqual({ type: 'hunterShoot', user: 'U6', target: 'none' });
+    expect(buttonAction('shoot', 'none', 'U6')).toEqual({ type: 'shoot', user: 'U6', target: 'none' });
     expect(buttonAction('unknown', 'x', 'U1')).toBeNull();
   });
 
@@ -283,7 +283,7 @@ describe('Slack：公告 GIF', () => {
   });
 
   it('預設設定檔每個時刻都有至少 6 張 Giphy GIF，而且不重複', () => {
-    const keys = ['start', 'night', 'dawnDeath', 'dawnPeace', 'exile', 'hunterShot', 'wolfKingShot', 'pk', 'duelWin', 'duelLose', 'goodWin', 'wolvesWin'];
+    const keys = ['start', 'night', 'dawnDeath', 'dawnPeace', 'exile', 'wolfKingShot', 'pk', 'duelWin', 'duelLose', 'goodWin', 'wolvesWin'];
     expect(Object.keys(GIFS).sort()).toEqual([...keys].sort());
     const all = Object.values(GIFS).flat();
     expect(new Set(all).size).toBe(all.length);

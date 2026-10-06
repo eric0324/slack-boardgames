@@ -14,7 +14,7 @@ export interface PlayerStats {
 }
 
 // 角色顯示順序
-const ROLE_ORDER: Role[] = ['werewolf', 'wolfKing', 'seer', 'witch', 'hunter', 'knight', 'villager'];
+const ROLE_ORDER: Role[] = ['werewolf', 'wolfKing', 'seer', 'witch', 'knight', 'villager'];
 
 export class StatsStore {
   private db: Database.Database;

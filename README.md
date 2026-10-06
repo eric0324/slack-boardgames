@@ -1,6 +1,6 @@
 # Slack 狼人殺 bot
 
-在 Slack 頻道裡玩文字版狼人殺，由 bot 擔任主持人。支援 6～12 人，角色有狼人、村民、預言家、女巫、獵人，採用屠邊規則。
+在 Slack 頻道裡玩文字版狼人殺，由 bot 擔任主持人。支援 6～12 人，角色有狼人、狼王、村民、預言家、女巫、騎士，採用屠邊規則。
 
 玩法和指令請看 [wiki](https://github.com/eric0324/slack-werewolve/wiki)：[遊戲規則](https://github.com/eric0324/slack-werewolve/wiki/遊戲規則)、[指令](https://github.com/eric0324/slack-werewolve/wiki/指令)。
 

@@ -1,5 +1,5 @@
 import { parseChat } from './chatParser.js';
-import { botLine, counterClaim, followClaim, hunterReveal, knightReveal, randomBotName, seerClaim, witchReveal } from './botLines.js';
+import { botLine, counterClaim, followClaim, knightReveal, randomBotName, seerClaim, witchReveal } from './botLines.js';
 
 // 狼人殺遊戲引擎：純邏輯，不碰任何 I/O。
 // applyAction(state, action, rng) → { state, events }，由 adapter 把 events 轉成 Slack 訊息。
@@ -7,18 +7,18 @@ import { botLine, counterClaim, followClaim, hunterReveal, knightReveal, randomB
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
-export type Role = 'werewolf' | 'wolfKing' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
+export type Phase = 'lobby' | 'night' | 'lastWords' | 'shooting' | 'speech' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type Role = 'werewolf' | 'wolfKing' | 'seer' | 'witch' | 'knight' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
 export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
   6: { werewolf: 2, seer: 1, witch: 1, villager: 2 },
-  7: { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 2 },
-  8: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 2 },
-  9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 2 },
-  10: { werewolf: 2, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
-  11: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
-  12: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 },
+  7: { werewolf: 2, seer: 1, witch: 1, villager: 3 },
+  8: { werewolf: 3, seer: 1, witch: 1, villager: 3 },
+  9: { werewolf: 3, seer: 1, witch: 1, knight: 1, villager: 3 },
+  10: { werewolf: 2, wolfKing: 1, seer: 1, witch: 1, knight: 1, villager: 4 },
+  11: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, knight: 1, villager: 4 },
+  12: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, knight: 1, villager: 5 },
 };
 
 export const ROLE_NAME: Record<Role, string> = {
@@ -26,7 +26,6 @@ export const ROLE_NAME: Record<Role, string> = {
   wolfKing: '狼王',
   seer: '預言家',
   witch: '女巫',
-  hunter: '獵人',
   knight: '騎士',
   villager: '村民',
 };
@@ -36,7 +35,6 @@ const ROLE_HELP: Record<Role, string> = {
   wolfKing: '你是狼人陣營，每晚和其他狼人一起擊殺。死亡時（被毒死除外）可以開槍帶走一位玩家。',
   seer: '每晚可以查驗一位玩家是好人還是狼人。',
   witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
-  hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
   knight: '整局一次，白天輪流發言時可以翻牌向一位玩家決鬥：對方是狼人就出局並直接入夜，對方是好人則你出局。',
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
@@ -92,7 +90,7 @@ export interface GameState {
   fakeSeer?: string; // 悍跳預言家的狼人 bot
   fakeSeerDecided: boolean; // 第一天是否已經決定過要不要悍跳
   seerClaimers: string[]; // 在頻道自稱過預言家的真人
-  godClaims: Record<string, 'witch' | 'hunter' | 'knight'>; // 在頻道自稱神職的真人
+  godClaims: Record<string, 'witch' | 'knight'>; // 在頻道自稱神職的真人
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -100,7 +98,7 @@ export interface GameState {
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
-  shooter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人或狼王
+  shooter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的狼王
 }
 
 export type Action =
@@ -119,7 +117,7 @@ export type Action =
   | { type: 'endSpeech'; user: string }
   | { type: 'skipSpeaker'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
-  | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
+  | { type: 'shoot'; user: string; target: string } // target 是玩家 id 或 'none'
   | { type: 'duel'; user: string; target: string }
   | { type: 'chat'; user: string; text: string } // 真人在頻道打的字
   | { type: 'timeout'; id: number };
@@ -148,7 +146,6 @@ export type GifKey =
   | 'dawnDeath'
   | 'dawnPeace'
   | 'exile'
-  | 'hunterShot'
   | 'wolfKingShot'
   | 'pk'
   | 'duelWin'
@@ -184,7 +181,7 @@ export function dealRoles(n: number, rng: Rng): Role[] {
   );
 }
 
-const GODS: Role[] = ['seer', 'witch', 'hunter', 'knight'];
+const GODS: Role[] = ['seer', 'witch', 'knight'];
 // 狼人陣營：狼王在擊殺、查驗、勝負判定時都算狼人
 export const isWolf = (role?: Role) => role === 'werewolf' || role === 'wolfKing';
 
@@ -365,9 +362,9 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
       return { type: 'dayVote', user: voter, target };
     }
   }
-  if (s.phase === 'hunter' && s.shooter && isBot(s.shooter.id)) {
+  if (s.phase === 'shooting' && s.shooter && isBot(s.shooter.id)) {
     const targets = [...alive(s).map((p) => p.id), 'none'];
-    return { type: 'hunterShoot', user: s.shooter.id, target: pick(targets, rng) };
+    return { type: 'shoot', user: s.shooter.id, target: pick(targets, rng) };
   }
   return null;
 }
@@ -445,24 +442,23 @@ function nextLastWords(c: Ctx) {
   else startSpeeches(c);
 }
 
-type DeathCause = 'wolf' | 'poison' | 'exile' | 'shot' | 'duel';
+type DeathCause = 'wolf' | 'poison' | 'exile' | 'duel';
 
-// 獵人：被狼人刀死或被放逐才能開槍；狼王：除了被毒死都可以
+// 狼王除了被毒死以外，任何死法都可以開槍
 function canShoot(s: GameState, id: string, cause: DeathCause): boolean {
   const role = player(s, id).role;
-  if (role === 'hunter') return cause === 'wolf' || cause === 'exile';
   if (role === 'wolfKing') return cause !== 'poison';
   return false;
 }
 
 function startShooter(c: Ctx, id: string, next: 'speech' | 'night') {
   const s = c.s;
-  s.phase = 'hunter';
+  s.phase = 'shooting';
   s.timers = {};
   s.shooter = { id, next };
   c.events.push({
     type: 'prompt',
-    kind: 'hunterShoot',
+    kind: 'shoot',
     audience: 'user',
     user: id,
     text: '你死亡了，可以開槍帶走一位玩家。',
@@ -478,14 +474,8 @@ function finishShooter(c: Ctx, target: string) {
   if (target !== 'none') {
     player(s, target).alive = false;
     const role = player(s, id).role!;
-    const gif = role === 'wolfKing' ? 'wolfKingShot' : 'hunterShot';
-    c.events.push({ type: 'announce', text: `🔫 ${ROLE_NAME[role]} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif });
+    c.events.push({ type: 'announce', text: `🔫 ${ROLE_NAME[role]} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'wolfKingShot' });
     if (checkGameOver(c)) return;
-    // 被帶走的人如果是狼王，輪到他開槍（連鎖）
-    if (canShoot(s, target, 'shot')) {
-      startShooter(c, target, next);
-      return;
-    }
   }
   if (next === 'speech') startSpeeches(c);
   else enterNight(c);
@@ -506,7 +496,7 @@ function startSpeeches(c: Ctx) {
 
 // 輪流發言時懷疑一位存活玩家並記下來；PK 時替自己辯護、提到另一位平票的人
 // 真人在頻道打的字：比對出查驗、懷疑、神職自稱，讓 bot 參考。只讀不回應
-const DAY_PHASES: Phase[] = ['lastWords', 'hunter', 'speech', 'vote', 'pkSpeech', 'pkVote'];
+const DAY_PHASES: Phase[] = ['lastWords', 'shooting', 'speech', 'vote', 'pkSpeech', 'pkVote'];
 
 function readChat(s: GameState, user: string, text: string): boolean {
   if (!DAY_PHASES.includes(s.phase) || isBot(user)) return false;
@@ -640,12 +630,11 @@ function wolfSuspect(s: GameState, id: string, pool: string[], rng: Rng) {
   return { target: pick(goods.length ? goods : pool.filter((p) => p !== id), rng), counter: false };
 }
 
-// 女巫、獵人、騎士被懷疑或進 PK 時亮身分
+// 女巫、騎士被懷疑或進 PK 時亮身分
 function godReveal(s: GameState, id: string, role: Role): string {
   if (role === 'witch') {
     return witchReveal(s.witchLog.map((l) => ({ night: l.night, saved: l.saved && mention(l.saved), poisoned: l.poisoned && mention(l.poisoned) })));
   }
-  if (role === 'hunter') return hunterReveal();
   if (role === 'knight') return knightReveal(s.knightUsed);
   return '';
 }
@@ -811,7 +800,7 @@ const reply = (c: Ctx, to: string, text: string) => {
 type GameAction = Exclude<Action, { type: 'new' } | { type: 'rematch' }>;
 
 // 只有這局的玩家才能做的操作（遊戲按鈕）
-const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote', 'duel'];
+const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'shoot', 'endSpeech', 'dayVote', 'duel'];
 
 // 回傳 true 代表 state 有變動
 function handle(c: Ctx, action: GameAction): boolean {
@@ -975,8 +964,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.voters.every((v) => s.votes[v])) endVote(c);
       return true;
     }
-    case 'hunterShoot': {
-      if (s.phase !== 'hunter' || action.user !== s.shooter?.id) return false;
+    case 'shoot': {
+      if (s.phase !== 'shooting' || action.user !== s.shooter?.id) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       if (action.target === 'none') c.events.push({ type: 'dm', to: action.user, text: '你選擇不開槍。' });
       finishShooter(c, action.target);
@@ -1012,7 +1001,7 @@ function handle(c: Ctx, action: GameAction): boolean {
         endVote(c);
         return true;
       }
-      if (action.id === s.timers.phase && s.phase === 'hunter') {
+      if (action.id === s.timers.phase && s.phase === 'shooting') {
         finishShooter(c, 'none');
         return true;
       }

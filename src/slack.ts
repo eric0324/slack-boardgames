@@ -73,8 +73,8 @@ export function buttonAction(kind: string, value: string, user: string, channel 
     case 'dayVote':
     case 'pkVote':
       return { type: 'dayVote', user, target: value };
-    case 'hunterShoot':
-      return { type: 'hunterShoot', user, target: value };
+    case 'shoot':
+      return { type: 'shoot', user, target: value };
     case 'endSpeech':
       return { type: 'endSpeech', user };
     case 'rematch':

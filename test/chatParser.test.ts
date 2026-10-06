@@ -49,9 +49,9 @@ describe('chatParser：比對真人的發言', () => {
   });
 
   it('自稱神職', () => {
-    expect(parseChat('我是獵人，別投我', players).godClaim).toBe('hunter');
+    expect(parseChat('我是騎士，別投我', players).godClaim).toBe('knight');
     expect(parseChat('我是女巫', players).godClaim).toBe('witch');
-    expect(parseChat('我是騎士', players).godClaim).toBe('knight');
+    expect(parseChat('我是獵人', players).godClaim).toBeUndefined();
     expect(parseChat('大家好', players).godClaim).toBeUndefined();
   });
 });

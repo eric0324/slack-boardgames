@@ -2,13 +2,13 @@
 
 export interface ChatInfo {
   seerClaim: boolean; // 自稱預言家
-  godClaim?: 'witch' | 'hunter' | 'knight'; // 自稱神職
+  godClaim?: 'witch' | 'knight'; // 自稱神職
   wolf: string[]; // 被說是狼人的玩家
   good: string[]; // 被說是好人的玩家
   suspect: string[]; // 被懷疑的玩家
 }
 
-const GOD_CLAIMS = { 女巫: 'witch', 獵人: 'hunter', 騎士: 'knight' } as const;
+const GOD_CLAIMS = { 女巫: 'witch', 騎士: 'knight' } as const;
 
 // 找出這一段提到的玩家：Slack mention（<@U123> 或 <@U123|名字>）或 bot 的名字（不分大小寫、要完整比對）
 function mentioned(segment: string, players: string[]): string[] {
@@ -30,7 +30,7 @@ function classify(segment: string): 'wolf' | 'good' | 'suspect' | null {
 }
 
 export function parseChat(text: string, players: string[]): ChatInfo {
-  const god = /我是(女巫|獵人|騎士)/.exec(text)?.[1] as keyof typeof GOD_CLAIMS | undefined;
+  const god = /我是(女巫|騎士)/.exec(text)?.[1] as keyof typeof GOD_CLAIMS | undefined;
   const info: ChatInfo = { seerClaim: /我(是)?預言家/.test(text), wolf: [], good: [], suspect: [] };
   if (god) info.godClaim = GOD_CLAIMS[god];
   for (const segment of text.split(/[，。、；！？,.;!?\n]+/)) {

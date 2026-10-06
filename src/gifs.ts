@@ -60,17 +60,6 @@ export const GIFS: Record<GifKey, string[]> = {
     'COAg7vjpWW8Ja',
     'ZBVhKIDgts1eHYdT7u',
   ),
-  // 開槍、決鬥、finger guns
-  hunterShot: giphy(
-    'Lmrt39eBJPNDSmwK62',
-    'YFHTSoWEywAiCAYSnx',
-    'xCM0GuXe7bb7a',
-    'a764YHoVKH85vERT3n',
-    'cdNSp4L5vCU7aQrYnV',
-    'abnULM28eCSCo23XeB',
-    'nYvTotGIK4QNc2EFQy',
-    'cEN4gJUpcEeRT2ubK3',
-  ),
   // 反派邪笑
   wolfKingShot: giphy(
     'wlBS2Aif8eBvW',
