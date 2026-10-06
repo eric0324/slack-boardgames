@@ -242,6 +242,21 @@ function maybeResolveNight(c: Ctx) {
   s.lastDeaths = [...deaths];
   s.timers = {};
   s.phase = 'day';
+  checkGameOver(c);
+}
+
+// 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true
+function checkGameOver(c: Ctx): boolean {
+  const winner = checkWinner(c.s.players);
+  if (!winner) return false;
+  c.s.phase = 'ended';
+  c.s.timers = {};
+  const roster = c.s.players
+    .map((p) => `${mention(p.id)}：${ROLE_NAME[p.role!]}（${p.alive ? '存活' : '死亡'}）`)
+    .join('\n');
+  const title = winner === 'good' ? '好人陣營獲勝！' : '狼人陣營獲勝！';
+  c.events.push({ type: 'announce', text: `遊戲結束，${title}\n${roster}` });
+  return true;
 }
 
 const reply = (c: Ctx, to: string, text: string) => {

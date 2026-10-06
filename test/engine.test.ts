@@ -480,3 +480,45 @@ describe('win-condition: 屠邊勝負規則', () => {
     expect(checkWinner(table('WwSihVv'))).toBeNull();
   });
 });
+
+// 6 人局（p1、p2 狼人，p3 預言家，p4 女巫，p5、p6 村民）。預言家已死，狼人今晚刀女巫 → 神職全滅，狼人獲勝
+function wolvesWinTonight() {
+  const s = started(6).state;
+  const seerDead: GameState = {
+    ...s,
+    players: s.players.map((p) => (p.id === 'p3' ? { ...p, alive: false } : p)),
+    night: { ...s.night!, seerDone: true },
+  };
+  return run(
+    [
+      { type: 'wolfVote', user: 'p1', target: 'p4' },
+      { type: 'wolfVote', user: 'p2', target: 'p4' },
+      { type: 'witchAct', user: 'p4', choice: 'skip' },
+    ],
+    seerDead,
+  );
+}
+
+describe('win-condition: 遊戲結束公開身分', () => {
+  it('公告獲勝陣營，列出所有玩家的角色和存活狀態', () => {
+    const { state, events } = wolvesWinTonight();
+    expect(state.phase).toBe('ended');
+    const text = events.filter((e) => e.type === 'announce').map((e) => (e as { text: string }).text).join('\n');
+    expect(text).toContain('狼人陣營獲勝');
+    expect(text).toMatch(/<@p1>.*狼人.*存活/);
+    expect(text).toMatch(/<@p3>.*預言家.*死亡/);
+    expect(text).toMatch(/<@p6>.*村民.*存活/);
+  });
+
+  it('結束後所有操作都沒有作用', () => {
+    const { state } = wolvesWinTonight();
+    expect(run([{ type: 'wolfVote', user: 'p1', target: 'p5' }], state).events).toEqual([]);
+    expect(run([{ type: 'cancel', user: 'p1' }], state).events).toEqual([]);
+  });
+
+  it('結束後可以重新開房', () => {
+    const { state } = wolvesWinTonight();
+    const after = run([{ type: 'new', user: 'p9', channel: 'C1' }], state).state;
+    expect(after).toMatchObject({ phase: 'lobby', host: 'p9' });
+  });
+});
