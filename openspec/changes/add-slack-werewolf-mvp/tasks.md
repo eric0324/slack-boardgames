@@ -168,3 +168,7 @@
 ## 34. 移除獵人
 
 - [x] 34.1 Engine 移除獵人：角色配置表的獵人改成村民，神職剩預言家、女巫、騎士；開槍只剩狼王（移除連鎖開槍）；bot 不再有獵人台詞；聊天比對不再認「我是獵人」；移除「獵人開槍」GIF；確認相關 scenarios 測試通過，並刪除或改寫獵人的測試、更新 wiki
+
+## 35. 部署到 Google Cloud
+
+- [x] 35.1 新增 `deploy/setup.sh`（安裝 Node 22、swap、系統帳號、下載程式、systemd）、`deploy/update.sh`、`deploy/werewolf.service`，README 加上 Google Cloud e2-micro 的部署步驟；確認 script 語法檢查通過（部署工具，不影響遊戲行為，沒有 spec 變更）

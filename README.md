@@ -61,3 +61,31 @@ bot 會讀取遊戲頻道裡真人打的字（例如「我是預言家，查殺 
 戰績會存在 `data/stats.db`（SQLite），可以用環境變數 `STATS_DB` 改位置；換電腦跑 bot 時記得一起搬過去。
 
 最後把 bot 邀請進要玩的頻道（`/invite @werewolf`），輸入 `/werewolf new` 就能開房。
+
+## 部署到 Google Cloud（免費的 e2-micro）
+
+bot 用 Socket Mode 主動連 Slack，不需要公開網址，只要一台一直開著的小主機。Google Cloud 的 Always Free 方案有一台 e2-micro 可以用。
+
+1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案並綁定帳單（免費方案也需要信用卡）
+2. **Compute Engine → VM 執行個體 → 建立執行個體**：
+   - 區域：`us-west1`、`us-central1` 或 `us-east1`（只有這三個在免費範圍內）
+   - 機器類型：`e2-micro`
+   - 開機磁碟：Ubuntu 24.04 LTS（x86/64），**標準永久磁碟** 30GB 以內
+   - 防火牆：不用開 HTTP／HTTPS
+3. 建好後按 **SSH** 連進主機，執行：
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/eric0324/slack-werewolve/main/deploy/setup.sh | bash
+   ```
+
+4. 填入 token 並啟動：
+
+   ```sh
+   sudo -u werewolf nano /opt/werewolf/app/.env
+   sudo systemctl start werewolf
+   sudo journalctl -u werewolf -f   # 看到 [werewolf] Bot is running 就成功了
+   ```
+
+之後要更新到最新版本：`sudo bash /opt/werewolf/app/deploy/update.sh`
+
+⚠️ 主機上的 bot 跑起來後，**記得關掉自己電腦上的 bot**，兩個同時連著 Slack 會讓每個指令被處理兩次。戰績存在主機的 `/opt/werewolf/app/data/stats.db`。
