@@ -160,3 +160,7 @@
 - [x] 32.1 新增 `src/chatParser.ts`：把一則訊息依標點切段，比對自稱預言家、查殺／金水、懷疑、自稱神職，支援 @mention 和 bot 名字；確認各種句型的單元測試通過
 - [x] 32.2 Engine 新增 `chat` action：只在白天採用存活玩家（和正在講遺言的死者）的訊息，把結果寫進 claims、suspects、神職自稱；確認 bot-players「bot 理解真人的發言」的 scenarios 測試通過
 - [x] 32.3 Slack adapter 接收頻道訊息（忽略 bot 訊息和編輯），轉成 `chat` action；manifest 加上 `channels:history`、`groups:history` scope 和 `message.channels`、`message.groups` event；更新 README、wiki
+
+## 33. 狼人數量追上好人就結束
+
+- [ ] 33.1 勝負判定加上「存活狼人 ≥ 存活好人時狼人獲勝」，狼人全滅仍然優先判好人勝；確認 win-condition 新增的 scenarios 測試通過，並調整因為這條規則而提早結束的既有測試資料，更新 wiki
