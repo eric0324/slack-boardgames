@@ -139,8 +139,16 @@ describe('role-assignment: 依人數配置角色', () => {
     expect(count(dealRoles(6, Math.random))).toEqual({ werewolf: 2, seer: 1, witch: 1, villager: 2 });
   });
 
-  it('12 人局：4 狼、1 預言家、1 女巫、1 獵人、1 騎士、4 村民', () => {
-    expect(count(dealRoles(12, Math.random))).toEqual({ werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 });
+  it('12 人局：3 狼、1 狼王、1 預言家、1 女巫、1 獵人、1 騎士、4 村民', () => {
+    expect(count(dealRoles(12, Math.random))).toEqual({
+      werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4,
+    });
+  });
+
+  it('10 人以上才有狼王，取代一位普通狼人', () => {
+    expect(count(dealRoles(9, Math.random)).wolfKing).toBeUndefined();
+    expect(count(dealRoles(10, Math.random))).toMatchObject({ werewolf: 2, wolfKing: 1 });
+    expect(count(dealRoles(11, Math.random))).toMatchObject({ werewolf: 3, wolfKing: 1 });
   });
 
   it('9 人以上才有騎士', () => {
@@ -464,7 +472,7 @@ describe('night-phase: 夜晚結算', () => {
 });
 
 // 用角色字串快速建立玩家，大寫開頭代表還活著，例如 'W' 活著的狼人、'w' 死掉的狼人
-const ROLE_CODE: Record<string, Role> = { w: 'werewolf', v: 'villager', s: 'seer', i: 'witch', h: 'hunter', k: 'knight' };
+const ROLE_CODE: Record<string, Role> = { w: 'werewolf', g: 'wolfKing', v: 'villager', s: 'seer', i: 'witch', h: 'hunter', k: 'knight' };
 const table = (codes: string) =>
   [...codes].map((ch, i) => ({ id: `p${i + 1}`, role: ROLE_CODE[ch.toLowerCase()], alive: ch !== ch.toLowerCase() }));
 
@@ -1468,5 +1476,29 @@ describe('day-phase: 騎士決鬥', () => {
     const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
     expect(day.state.phase).toBe('speech');
     expect(announces(day.events).some((t) => t.includes('翻牌'))).toBe(false);
+  });
+});
+
+// 10 人局：p1、p2 狼人，p3 狼王，p4 預言家，p5 女巫，p6 獵人，p7 騎士，p8~p10 村民
+describe('role-assignment: 狼王', () => {
+  it('狼人對話列出狼王並標出來', () => {
+    const chat = started(10).events.find((e) => e.type === 'wolfChat') as { wolves: string[]; text: string };
+    expect(chat.wolves).toEqual(['p1', 'p2', 'p3']);
+    expect(chat.text).toContain('<@p3>（狼王）');
+  });
+
+  it('狼王和其他狼人一起擊殺', () => {
+    const { state } = run(['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p8' }) as Action), started(10).state);
+    expect(state.night!.wolfTarget).toBe('p8');
+  });
+
+  it('預言家查驗狼王的結果是狼人', () => {
+    const { events } = run([{ type: 'seerCheck', user: 'p4', target: 'p3' }], started(10).state);
+    expect(events).toContainEqual({ type: 'dm', to: 'p4', text: '<@p3> 是狼人。' });
+  });
+
+  it('勝負判定時狼王算狼人', () => {
+    expect(checkWinner(table('wwGSIHKVV'))).toBeNull();
+    expect(checkWinner(table('wwgSIHKVV'))).toBe('good');
   });
 });

@@ -5,7 +5,7 @@ export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
 export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
-export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
+export type Role = 'werewolf' | 'wolfKing' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
 export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
@@ -13,13 +13,14 @@ export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
   7: { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 2 },
   8: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 2 },
   9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 2 },
-  10: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
-  11: { werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
-  12: { werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 },
+  10: { werewolf: 2, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  11: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  12: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 },
 };
 
 export const ROLE_NAME: Record<Role, string> = {
   werewolf: '狼人',
+  wolfKing: '狼王',
   seer: '預言家',
   witch: '女巫',
   hunter: '獵人',
@@ -29,6 +30,7 @@ export const ROLE_NAME: Record<Role, string> = {
 
 const ROLE_HELP: Record<Role, string> = {
   werewolf: '每晚和其他狼人一起選一位玩家擊殺。殺光所有村民或所有神職就獲勝。',
+  wolfKing: '你是狼人陣營，每晚和其他狼人一起擊殺。死亡時（被毒死除外）可以開槍帶走一位玩家。',
   seer: '每晚可以查驗一位玩家是好人還是狼人。',
   witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
   hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
@@ -155,11 +157,13 @@ export function dealRoles(n: number, rng: Rng): Role[] {
 }
 
 const GODS: Role[] = ['seer', 'witch', 'hunter', 'knight'];
+// 狼人陣營：狼王在擊殺、查驗、勝負判定時都算狼人
+export const isWolf = (role?: Role) => role === 'werewolf' || role === 'wolfKing';
 
 // 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅或神職全滅 → 狼人贏
 export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
   const allDead = (match: (r: Role) => boolean) => players.filter((p) => match(p.role!)).every((p) => !p.alive);
-  if (allDead((r) => r === 'werewolf')) return 'good';
+  if (allDead(isWolf)) return 'good';
   if (allDead((r) => r === 'villager') || allDead((r) => GODS.includes(r))) return 'wolves';
   return null;
 }
@@ -168,7 +172,8 @@ const player = (s: GameState, id: string) => s.players.find((p) => p.id === id)!
 const alive = (s: GameState) => s.players.filter((p) => p.alive);
 const aliveWith = (s: GameState, role: Role) => alive(s).filter((p) => p.role === role);
 const isAlive = (s: GameState, id: string) => alive(s).some((p) => p.id === id);
-const wolfIds = (s: GameState) => s.players.filter((p) => p.role === 'werewolf').map((p) => p.id);
+const wolfIds = (s: GameState) => s.players.filter((p) => isWolf(p.role)).map((p) => p.id);
+const aliveWolves = (s: GameState) => alive(s).filter((p) => isWolf(p.role));
 const options = (ids: string[]): Option[] => ids.map((id) => ({ value: id, label: id }));
 
 const lobbyEvent = (s: GameState): GameEvent => ({
@@ -209,7 +214,11 @@ function announceStart(c: Ctx) {
       to: p.id,
       text: `你的身分是「${ROLE_NAME[p.role!]}」。${ROLE_HELP[p.role!]}`,
     })),
-    { type: 'wolfChat', wolves, text: `這裡是狼人的私密對話。狼人：${wolves.map(mention).join(' ')}` },
+    {
+      type: 'wolfChat',
+      wolves,
+      text: `這裡是狼人的私密對話。狼人：${wolves.map((id) => mention(id) + (player(s, id).role === 'wolfKing' ? '（狼王）' : '')).join(' ')}`,
+    },
   );
 }
 
@@ -296,8 +305,8 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
   const n = s.night;
   if (s.phase === 'night' && n) {
     if (n.wolfTarget === undefined) {
-      const wolf = aliveWith(s, 'werewolf').find((p) => isBot(p.id) && !n.wolfVotes[p.id]);
-      const prey = alive(s).filter((p) => p.role !== 'werewolf').map((p) => p.id);
+      const wolf = aliveWolves(s).find((p) => isBot(p.id) && !n.wolfVotes[p.id]);
+      const prey = alive(s).filter((p) => !isWolf(p.role)).map((p) => p.id);
       if (wolf) return { type: 'wolfVote', user: wolf.id, target: pick(prey, rng) };
     }
     const seer = aliveBot(s, 'seer');
@@ -458,7 +467,7 @@ function duel(c: Ctx, knight: string, target: string) {
   const s = c.s;
   s.knightUsed = true;
   c.events.push({ type: 'announce', text: `🗡️ 騎士 ${mention(knight)} 翻牌，向 ${mention(target)} 發起決鬥！` });
-  if (player(s, target).role === 'werewolf') {
+  if (isWolf(player(s, target).role)) {
     player(s, target).alive = false;
     c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。` });
     if (checkGameOver(c)) return;
@@ -668,7 +677,7 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'wolfVote': {
       const n = s.night;
       if (s.phase !== 'night' || !n || n.wolfTarget !== undefined) return false;
-      if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user)) return false;
+      if (!aliveWolves(s).some((p) => p.id === action.user)) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       n.wolfVotes[action.user] = action.target;
       const picked =
@@ -676,7 +685,7 @@ function handle(c: Ctx, action: GameAction): boolean {
           ? `${mention(action.user)} 選擇不殺人。`
           : `${mention(action.user)} 選擇擊殺 ${mention(action.target)}。`;
       c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text: picked });
-      if (aliveWith(s, 'werewolf').every((w) => n.wolfVotes[w.id])) decideWolves(c);
+      if (aliveWolves(s).every((w) => n.wolfVotes[w.id])) decideWolves(c);
       return true;
     }
     case 'seerCheck': {
@@ -686,7 +695,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (action.target === action.user || !isAlive(s, action.target)) return false;
       n.seerDone = true;
       const target = player(s, action.target);
-      const side = target.role === 'werewolf' ? '狼人' : '好人';
+      const side = isWolf(target.role) ? '狼人' : '好人';
       c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
     }
@@ -768,7 +777,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       }
       if (action.id === s.timers.wolfRemind && n) {
         delete s.timers.wolfRemind;
-        const waiting = aliveWith(s, 'werewolf').filter((w) => !n.wolfVotes[w.id]);
+        const waiting = aliveWolves(s).filter((w) => !n.wolfVotes[w.id]);
         if (n.wolfTarget === undefined && waiting.length) {
           const text = `⏰ 剩下 ${WOLF_REMIND_BEFORE_MS / 1000} 秒，還沒選的：${waiting.map((w) => mention(w.id)).join('、')}`;
           c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text });
