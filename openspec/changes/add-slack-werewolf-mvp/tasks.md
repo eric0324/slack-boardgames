@@ -105,3 +105,9 @@
 - [x] 20.1 Engine：角色配置表加入狼王（10 人以上取代一位普通狼人），狼王在擊殺、查驗、勝負中都算狼人，狼人對話標出狼王，身分私訊有能力說明；確認 role-assignment 狼王相關 scenarios 測試通過
 - [x] 20.2 Engine：把獵人開槍一般化成「開槍者」，狼王除了被毒死之外任何死法都能開槍（放逐、被刀、被開槍帶走、被騎士決鬥），支援連鎖開槍；確認 day-phase「狼王開槍」的 scenarios 測試通過
 - [x] 20.3 更新 wiki 的遊戲規則頁（角色配置、狼王能力）
+
+## 21. 戰績查詢
+
+- [ ] 21.1 Engine：遊戲分出勝負時送出 `gameRecord` event（頻道、獲勝陣營、每位玩家的角色），有 bot 或取消的遊戲不送；確認 player-stats「記錄遊戲結果」中 engine 相關的 scenarios 測試通過
+- [ ] 21.2 新增 `src/stats.ts`：把紀錄存成 JSON 檔、從檔案載入、依頻道和玩家計算總計／陣營／角色的場數與勝率，並格式化成查詢結果；確認「查詢戰績」的 scenarios 和「bot 重新啟動後戰績還在」測試通過
+- [ ] 21.3 Slack adapter 支援 `/werewolf stats [@某人]`（解析使用者 mention），收到 `gameRecord` 時存檔；manifest 的 slash command 改成 `should_escape: true` 以取得使用者 id；更新 README、wiki 指令頁；用假的 Slack client 確認查詢流程

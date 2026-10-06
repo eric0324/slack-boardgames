@@ -25,6 +25,7 @@
 - `day-phase`: 公布夜晚死訊、輪流發言、放逐投票、平票 PK、獵人開槍
 - `win-condition`: 屠邊勝負判定、判定時機，以及遊戲結束時公開身分
 - `bot-players`: 房主可以加入或移除 bot 玩家補足人數，bot 輪到時隨機、立刻行動
+- `player-stats`: 記錄全真人遊戲的結果，用 `/werewolf stats` 查詢自己或別人在頻道的戰績（總計、陣營、角色）
 - `announcement-gifs`: 重要時刻的頻道公告附上 Giphy GIF 和 emoji，開始公告提醒玩家查看私訊
 
 ### Modified Capabilities
