@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'hunter' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type Phase = 'lobby' | 'night' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -39,9 +39,8 @@ export const isBot = (id: string) => id.startsWith('bot:');
 export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<@${id}>`);
 
 export const ACTION_MS = 60_000;
-export const DISCUSSION_MS = 5 * 60_000;
-export const PK_SPEECH_MS = 2 * 60_000;
-const REMIND_BEFORE_MS = 60_000;
+export const SPEECH_MS = 40_000; // 輪流發言每人的時間
+export const DISCUSSION_MS = 2 * 60_000; // 輪流發言後的自由討論
 
 export interface Player {
   id: string;
@@ -71,11 +70,12 @@ export interface GameState {
   night?: NightState;
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
-  reminded: boolean; // 討論時間是否已經提醒過剩 1 分鐘
+  speakers: string[]; // 還沒輪到的發言者
+  speaker?: string; // 目前的發言者
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
-  hunter?: { id: string; next: 'discussion' | 'night' }; // 正在等待開槍的獵人
+  hunter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人
 }
 
 export type Action =
@@ -90,6 +90,8 @@ export type Action =
   | { type: 'seerCheck'; user: string; target: string }
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
   | { type: 'endDiscussion'; user: string }
+  | { type: 'endSpeech'; user: string }
+  | { type: 'skipSpeaker'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
   | { type: 'timeout'; id: number };
@@ -334,11 +336,11 @@ function dawn(c: Ctx) {
   const n = c.s.night!;
   const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
   const hunter = c.s.players.find((p) => p.id === shotByWolves && p.role === 'hunter');
-  if (hunter) startHunter(c, hunter.id, 'discussion');
-  else startDiscussion(c);
+  if (hunter) startHunter(c, hunter.id, 'speech');
+  else startSpeeches(c);
 }
 
-function startHunter(c: Ctx, id: string, next: 'discussion' | 'night') {
+function startHunter(c: Ctx, id: string, next: 'speech' | 'night') {
   const s = c.s;
   s.phase = 'hunter';
   s.timers = {};
@@ -363,16 +365,50 @@ function finishHunter(c: Ctx, target: string) {
     c.events.push({ type: 'announce', text: `🔫 獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
     if (checkGameOver(c)) return;
   }
-  if (next === 'discussion') startDiscussion(c);
+  if (next === 'speech') startSpeeches(c);
   else enterNight(c);
 }
 
-function startDiscussion(c: Ctx) {
-  c.s.phase = 'discussion';
-  c.s.reminded = false;
-  c.s.timers = {};
-  c.events.push({ type: 'announce', text: `💬 開始討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
-  startTimer(c, 'phase', DISCUSSION_MS - REMIND_BEFORE_MS);
+// 隨機選起點，依加入順序（座位）輪流發言
+function startSpeeches(c: Ctx) {
+  const s = c.s;
+  const living = alive(s).map((p) => p.id);
+  const first = Math.floor(c.rng() * living.length);
+  s.phase = 'speech';
+  s.speakers = [...living.slice(first), ...living.slice(0, first)];
+  c.events.push({ type: 'announce', text: `💬 開始輪流發言，順序：${s.speakers.map(mention).join(' → ')}` });
+  nextSpeaker(c);
+}
+
+// 換下一位發言者；bot 直接過，沒有人了就進入下一個階段
+function nextSpeaker(c: Ctx) {
+  const s = c.s;
+  s.timers = {};
+  for (let id = s.speakers.shift(); id; id = s.speakers.shift()) {
+    s.speaker = id;
+    if (isBot(id)) {
+      c.events.push({ type: 'announce', text: `${mention(id)}：過。` });
+      continue;
+    }
+    c.events.push({
+      type: 'prompt',
+      kind: 'endSpeech',
+      audience: 'channel',
+      text: `🎤 輪到 ${mention(id)} 發言（${SPEECH_MS / 1000} 秒）`,
+      options: [{ value: id, label: '結束發言' }],
+    });
+    startTimer(c, 'phase', SPEECH_MS);
+    return;
+  }
+  s.speaker = undefined;
+  if (s.phase === 'pkSpeech') {
+    const voters = alive(s).filter((p) => !s.candidates.includes(p.id)).map((p) => p.id);
+    openVote(c, 'pkVote', s.candidates, voters);
+    return;
+  }
+  s.phase = 'discussion';
+  c.events.push({ type: 'announce', text: `💬 開始自由討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
+  startTimer(c, 'phase', DISCUSSION_MS);
 }
 
 function startVote(c: Ctx) {
@@ -401,13 +437,10 @@ function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters
 function startPk(c: Ctx, tied: string[]) {
   const s = c.s;
   s.phase = 'pkSpeech';
-  s.timers = {};
   s.candidates = tied;
-  c.events.push({
-    type: 'announce',
-    text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，有 ${PK_SPEECH_MS / 60_000} 分鐘可以再次發言。`,
-  });
-  startTimer(c, 'phase', PK_SPEECH_MS);
+  s.speakers = s.players.map((p) => p.id).filter((id) => tied.includes(id));
+  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序再發言一次。` });
+  nextSpeaker(c);
 }
 
 function endVote(c: Ctx) {
@@ -567,9 +600,21 @@ function handle(c: Ctx, action: GameAction): boolean {
       return true;
     }
     case 'endDiscussion': {
-      if (s.phase !== 'discussion') return false;
+      if (s.phase !== 'speech' && s.phase !== 'discussion') return false;
       if (action.user !== s.host) return reply(c, action.user, '只有房主可以提前結束討論。');
       startVote(c);
+      return true;
+    }
+    case 'endSpeech': {
+      if (s.phase !== 'speech' && s.phase !== 'pkSpeech') return false;
+      if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'skipSpeaker': {
+      if (s.phase !== 'speech' && s.phase !== 'pkSpeech') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過發言者。');
+      nextSpeaker(c);
       return true;
     }
     case 'dayVote': {
@@ -606,13 +651,11 @@ function handle(c: Ctx, action: GameAction): boolean {
         return true;
       }
       if (action.id === s.timers.phase && s.phase === 'discussion') {
-        if (s.reminded) {
-          startVote(c);
-        } else {
-          s.reminded = true;
-          c.events.push({ type: 'announce', text: '💬 討論時間剩下 1 分鐘。' });
-          startTimer(c, 'phase', REMIND_BEFORE_MS);
-        }
+        startVote(c);
+        return true;
+      }
+      if (action.id === s.timers.phase && (s.phase === 'speech' || s.phase === 'pkSpeech')) {
+        nextSpeaker(c);
         return true;
       }
       if (action.id === s.timers.phase && (s.phase === 'vote' || s.phase === 'pkVote')) {
@@ -621,11 +664,6 @@ function handle(c: Ctx, action: GameAction): boolean {
       }
       if (action.id === s.timers.phase && s.phase === 'hunter') {
         finishHunter(c, 'none');
-        return true;
-      }
-      if (action.id === s.timers.phase && s.phase === 'pkSpeech') {
-        const voters = alive(s).filter((p) => !s.candidates.includes(p.id)).map((p) => p.id);
-        openVote(c, 'pkVote', s.candidates, voters);
         return true;
       }
       return false;
@@ -648,7 +686,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       timers: {},
       potions: { antidote: true, poison: true },
       lastDeaths: [],
-      reminded: false,
+      speakers: [],
       votes: {},
       candidates: [],
       voters: [],

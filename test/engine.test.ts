@@ -567,32 +567,86 @@ describe('win-condition: 判定時機', () => {
 
 const lastTimer = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer').at(-1) as { id: number; ms: number };
 
-describe('day-phase: 討論時間', () => {
-  it('天亮後進入 5 分鐘討論，剩 1 分鐘時提醒，時間到進入投票', () => {
-    const night = fullNight('p7', 'skip');
-    expect(night.state.phase).toBe('discussion');
-    expect(announces(night.events)).toContainEqual(expect.stringContaining('5 分鐘'));
-    const t1 = lastTimer(night.events);
-    expect(t1.ms).toBe(4 * 60_000);
+const speechPrompt = (events: GameEvent[]) => prompts(events, 'endSpeech').at(-1);
+const lastPerWitch = (rng: () => number) => {
+  const night = run(
+    [
+      ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p7' }) as Action),
+      { type: 'seerCheck', user: 'p4', target: 'p1' },
+    ],
+    started(8).state,
+  ).state;
+  return applyAction(night, { type: 'witchAct', user: 'p5', choice: 'skip' }, rng);
+};
 
-    const remind = run([{ type: 'timeout', id: t1.id }], night.state);
-    expect(announces(remind.events)).toContainEqual(expect.stringContaining('1 分鐘'));
-    const t2 = lastTimer(remind.events);
-    expect(t2.ms).toBe(60_000);
-
-    expect(run([{ type: 'timeout', id: t2.id }], remind.state).state.phase).toBe('vote');
+// fullNight('p7', 'skip') 之後：存活 p1~p6、p8，rng 固定時從最後一位 p8 開始
+describe('day-phase: 輪流發言', () => {
+  it('公告發言順序（跳過死亡的 p7），輪到第一位發言 40 秒', () => {
+    const { state, events } = fullNight('p7', 'skip');
+    expect(state).toMatchObject({ phase: 'speech', speaker: 'p8' });
+    expect(announces(events)).toContainEqual(expect.stringContaining('<@p8> → <@p1> → <@p2> → <@p3> → <@p4> → <@p5> → <@p6>'));
+    const p = speechPrompt(events)!;
+    expect(p).toMatchObject({ audience: 'channel', text: expect.stringContaining('輪到 <@p8> 發言（40 秒）') });
+    expect(values(p)).toEqual(['p8']);
+    expect(lastTimer(events).ms).toBe(40_000);
   });
 
-  it('房主可以提前結束討論', () => {
+  it('起點是隨機的', () => {
+    expect(lastPerWitch(() => 0).state.speaker).toBe('p1');
+    expect(lastPerWitch(() => 0.99999).state.speaker).toBe('p8');
+  });
+
+  it('時間到換下一位', () => {
+    const { state, events } = fullNight('p7', 'skip');
+    const next = run([{ type: 'timeout', id: lastTimer(events).id }], state);
+    expect(next.state.speaker).toBe('p1');
+    expect(speechPrompt(next.events)!.text).toContain('輪到 <@p1> 發言');
+  });
+
+  it('發言者提前結束', () => {
+    const { state } = fullNight('p7', 'skip');
+    expect(run([{ type: 'endSpeech', user: 'p8' }], state).state.speaker).toBe('p1');
+  });
+
+  it('不是發言者按結束發言：不換人，提示本人', () => {
+    const { state } = fullNight('p7', 'skip');
+    const after = run([{ type: 'endSpeech', user: 'p2' }], state);
+    expect(after.state.speaker).toBe('p8');
+    expect(ephemeralTo(after.events, 'p2')).toMatchObject({ text: expect.stringContaining('不是你的發言時間') });
+  });
+
+  it('房主可以跳過發言者，非房主不行', () => {
+    const { state } = fullNight('p7', 'skip');
+    expect(run([{ type: 'skipSpeaker', user: 'p1' }], state).state.speaker).toBe('p1');
+    const denied = run([{ type: 'skipSpeaker', user: 'p2' }], state);
+    expect(denied.state.speaker).toBe('p8');
+    expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
+  });
+
+  it('輪到 bot 時公告「過」，立刻換下一位', () => {
+    const { state } = withBots();
+    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+    expect(announces(day.events)).toContainEqual(expect.stringMatching(/^🤖Bot\d：過。$/));
+    expect(day.state.speaker).toBe('p1');
+  });
+
+  it('全部講完進入 2 分鐘自由討論，時間到進入投票', () => {
+    const { state } = fullNight('p7', 'skip');
+    const done = run(['p8', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'endSpeech', user }) as Action), state);
+    expect(done.state.phase).toBe('discussion');
+    expect(announces(done.events)).toContainEqual(expect.stringContaining('開始自由討論，時間 2 分鐘'));
+    expect(lastTimer(done.events).ms).toBe(2 * 60_000);
+    expect(run([{ type: 'timeout', id: lastTimer(done.events).id }], done.state).state.phase).toBe('vote');
+  });
+
+  it('房主可以在輪流發言或自由討論時直接進入投票，非房主不行', () => {
     const { state } = fullNight('p7', 'skip');
     expect(run([{ type: 'endDiscussion', user: 'p1' }], state).state.phase).toBe('vote');
-  });
-
-  it('非房主不能提前結束討論', () => {
-    const { state } = fullNight('p7', 'skip');
-    const after = run([{ type: 'endDiscussion', user: 'p2' }], state);
-    expect(after.state.phase).toBe('discussion');
-    expect(ephemeralTo(after.events, 'p2')).toBeDefined();
+    const free = run(['p8', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'endSpeech', user }) as Action), state).state;
+    expect(run([{ type: 'endDiscussion', user: 'p1' }], free).state.phase).toBe('vote');
+    const denied = run([{ type: 'endDiscussion', user: 'p2' }], state);
+    expect(denied.state.phase).toBe('speech');
+    expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
   });
 });
 
@@ -681,19 +735,30 @@ const tied = () =>
     votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p4', 'p1'], ['p5', 'p1'], ['p6', 'p1'], ['p8', 'abstain']]),
     voting().state,
   );
-const pkVoting = () => {
-  const t = tied();
-  return run([{ type: 'timeout', id: lastTimer(t.events).id }], t.state);
-};
+const pkVoting = () =>
+  run(
+    [
+      { type: 'endSpeech', user: 'p1' },
+      { type: 'endSpeech', user: 'p4' },
+    ],
+    tied().state,
+  );
 
 describe('day-phase: 平票 PK', () => {
-  it('平票時平手的玩家有 2 分鐘發言', () => {
+  it('平票時平手的玩家依加入順序輪流發言，講完直接進入 PK 投票', () => {
     const { state, events } = tied();
-    expect(state.phase).toBe('pkSpeech');
+    expect(state).toMatchObject({ phase: 'pkSpeech', speaker: 'p1' });
     const pk = announces(events).find((t) => t.includes('PK'))!;
     expect(pk).toContain('<@p1>');
     expect(pk).toContain('<@p4>');
-    expect(lastTimer(events).ms).toBe(2 * 60_000);
+    expect(speechPrompt(events)!.text).toContain('輪到 <@p1> 發言（40 秒）');
+    expect(lastTimer(events).ms).toBe(40_000);
+
+    const p4 = run([{ type: 'endSpeech', user: 'p1' }], state);
+    expect(speechPrompt(p4.events)!.text).toContain('輪到 <@p4> 發言');
+    const vote = run([{ type: 'endSpeech', user: 'p4' }], p4.state);
+    expect(vote.state.phase).toBe('pkVote');
+    expect(announces(vote.events).some((t) => t.includes('自由討論'))).toBe(false);
   });
 
   it('PK 投票只能投平票的玩家或棄票', () => {
@@ -735,12 +800,12 @@ describe('day-phase: 獵人開槍', () => {
     const [p] = prompts(night.events, 'hunterShoot');
     expect(p).toMatchObject({ audience: 'user', user: 'p6' });
     expect(values(p)).toContain('none');
-    expect(announces(night.events).some((t) => t.includes('開始討論'))).toBe(false);
+    expect(announces(night.events).some((t) => t.includes('輪流發言'))).toBe(false);
 
     const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], night.state);
     expect(announces(shot.events)).toContainEqual(expect.stringContaining('獵人 <@p6> 開槍帶走了 <@p8>'));
     expect(isDead(shot.state, 'p8')).toBe(true);
-    expect(shot.state.phase).toBe('discussion');
+    expect(shot.state.phase).toBe('speech');
   });
 
   it('被放逐的獵人開槍後，判斷勝負再進入夜晚', () => {
@@ -758,7 +823,7 @@ describe('day-phase: 獵人開槍', () => {
     const { state, events } = fullNight('p7', 'poison:p6');
     expect(prompts(events, 'hunterShoot')).toEqual([]);
     expect(announces(events).some((t) => t.includes('獵人'))).toBe(false);
-    expect(state.phase).toBe('discussion');
+    expect(state.phase).toBe('speech');
   });
 
   it('選擇不開槍或超時：沒有人死亡，不公開獵人身分', () => {
@@ -769,7 +834,7 @@ describe('day-phase: 獵人開槍', () => {
     ]) {
       expect(next.state.players.filter((p) => !p.alive).map((p) => p.id)).toEqual(['p6']);
       expect(announces(next.events).some((t) => t.includes('獵人'))).toBe(false);
-      expect(next.state.phase).toBe('discussion');
+      expect(next.state.phase).toBe('speech');
     }
   });
 
@@ -817,7 +882,7 @@ describe('整局流程', () => {
       { type: 'witchAct', user: 'p4', choice: 'save' },
     ]);
     expect(announces(e1)).toContainEqual(expect.stringContaining('平安夜'));
-    expect(s1.phase).toBe('discussion');
+    expect(s1.phase).toBe('speech');
 
     const { state: s2 } = run(
       [
@@ -1030,7 +1095,7 @@ describe('announcement-gifs: 重要時刻的 GIF 和 emoji', () => {
   });
 
   it('討論 💬、投票 🗳️、平票 PK ⚔️', () => {
-    expect(announceWith(fullNight('p7', 'skip').events, '開始討論').text.startsWith('💬')).toBe(true);
+    expect(announceWith(fullNight('p7', 'skip').events, '輪流發言').text.startsWith('💬')).toBe(true);
     expect(announceWith(tied().events, '投票結果').text.startsWith('🗳️')).toBe(true);
     expect(announceWith(tied().events, 'PK').text.startsWith('⚔️')).toBe(true);
   });
