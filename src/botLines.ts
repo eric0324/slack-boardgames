@@ -196,7 +196,5 @@ export function witchReveal(log: { night: number; saved?: string; poisoned?: str
   return parts.length ? `我是女巫，${parts.join('、')}，別投我！` : '我是女巫，藥都還在，別投我！';
 }
 
-export const hunterReveal = () => '我是獵人，投我出局我會開槍帶人走，想清楚再投。';
-
 export const knightReveal = (used: boolean) =>
   used ? '我是騎士，已經決鬥過了，我是好人！' : '我是騎士，留著我還有用，別投我！';
