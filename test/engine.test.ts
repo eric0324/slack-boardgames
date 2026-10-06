@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { botLine } from '../src/botLines.js';
+import { botLine, randomBotName } from '../src/botLines.js';
 import { applyAction, checkWinner, dealRoles, isBot, mention, ROLE_NAME, ROLE_TABLE, type Action, type GameEvent, type GameState, type Role } from '../src/engine.js';
 
 const rng = () => 0.99999; // Fisher-Yates 不交換，角色照配置表順序發
@@ -654,8 +654,8 @@ describe('day-phase: 輪流發言', () => {
 
   it('輪到 bot 時說一句台詞，立刻換下一位', () => {
     const { state } = withBots();
-    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
-    expect(announces(day.events).some((t) => /^🤖Bot\d：.+/.test(t) && !t.endsWith('：過。'))).toBe(true);
+    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] }], state);
+    expect(announces(day.events).some((t) => /^🤖[^：]+：.+/.test(t) && !t.endsWith('：過。'))).toBe(true);
     expect(day.state.speaker).toBe('p1');
   });
 
@@ -978,13 +978,15 @@ describe('按鈕確認訊息', () => {
   });
 });
 
-const ids = (s: GameState) => s.players.map((p) => p.id);
+const shortId = (id: string) => (isBot(id) ? id.split(':').slice(0, 2).join(':') : id);
+const ids = (s: GameState) => s.players.map((p) => shortId(p.id));
+const botId = (s: GameState, n: number) => s.players.find((p) => shortId(p.id) === `bot:${n}`)!.id;
 
 describe('bot-players: 加入與移除 bot', () => {
   it('加入多個 bot，房間公告跟著更新', () => {
     const { state, events } = run([{ type: 'addBot', user: 'p1', count: 5 }], lobbyWith(1).state);
     expect(ids(state)).toEqual(['p1', 'bot:1', 'bot:2', 'bot:3', 'bot:4', 'bot:5']);
-    expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', players: ids(state) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', players: state.players.map((p) => p.id) }));
   });
 
   it('加入 bot 超過上限：只加到 12 人，提示房主房間已滿', () => {
@@ -1033,15 +1035,15 @@ describe('bot-players: 加入與移除 bot', () => {
 });
 
 describe('bot-players: bot 的顯示方式', () => {
-  it('bot 顯示成 🤖Bot<編號>，真人還是 <@id>', () => {
-    expect(mention('bot:1')).toBe('🤖Bot1');
+  it('bot 顯示成 🤖<名字>，真人還是 <@id>', () => {
+    expect(mention('bot:1:漆黑的墮天使')).toBe('🤖漆黑的墮天使');
     expect(mention('U123')).toBe('<@U123>');
     expect(isBot('bot:3')).toBe(true);
     expect(isBot('U123')).toBe(false);
   });
 });
 
-// p1 真人 + 5 個 bot。rng 固定時：p1、bot:1 狼人，bot:2 預言家，bot:3 女巫，bot:4、bot:5 村民
+// p1 真人 + 5 個 bot。rng 固定時：p1、第 1 個 bot 狼人，第 2 個預言家，第 3 個女巫，第 4、5 個村民
 const withBots = () =>
   run([{ type: 'addBot', user: 'p1', count: 5 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
 const roleOf = (s: GameState, id: string) => s.players.find((p) => p.id === id)!.role;
@@ -1049,16 +1051,16 @@ const roleOf = (s: GameState, id: string) => s.players.find((p) => p.id === id)!
 describe('bot-players: bot 自動行動', () => {
   it('bot 狼人立刻選好存活的非狼人，bot 預言家立刻查驗', () => {
     const { state, events } = withBots();
-    const target = state.night!.wolfVotes['bot:1'];
+    const target = state.night!.wolfVotes[botId(state, 1)];
     expect(target).toBeDefined();
     expect(roleOf(state, target)).not.toBe('werewolf');
     expect(state.night!.seerDone).toBe(true);
-    expect(wolfChatText(events)).toContain('🤖Bot1 選擇擊殺');
+    expect(wolfChatText(events)).toContain(`${mention(botId(state, 1))} 選擇擊殺`);
   });
 
   it('真人行動完後，其他都是 bot，夜晚立刻結算', () => {
     const { state } = withBots();
-    const after = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state).state;
+    const after = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] }], state).state;
     expect(after.phase).not.toBe('night');
     expect(after.night!.witchDone).toBe(true);
   });
@@ -1067,7 +1069,7 @@ describe('bot-players: bot 自動行動', () => {
     const { state } = withBots();
     const day = run(
       [
-        { type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] },
+        { type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] },
         { type: 'endDiscussion', user: 'p1' },
       ],
       state,
@@ -1266,7 +1268,7 @@ describe('day-phase: 遺言', () => {
 
   it('bot 會講一句遺言', () => {
     const { state } = withBots();
-    const dead = state.night!.wolfVotes['bot:1'];
+    const dead = state.night!.wolfVotes[botId(state, 1)];
     const day = run([{ type: 'wolfVote', user: 'p1', target: dead }], state);
     const words = announces(day.events).find((t) => t.startsWith(`${mention(dead)}：`))!;
     expect(words).toBeDefined();
@@ -1485,7 +1487,7 @@ describe('day-phase: 騎士決鬥', () => {
 
   it('bot 騎士不會決鬥', () => {
     const { state } = run([{ type: 'addBot', user: 'p1', count: 8 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
-    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] }], state);
     expect(day.state.phase).toBe('speech');
     expect(announces(day.events).some((t) => t.includes('翻牌'))).toBe(false);
   });
@@ -1628,7 +1630,7 @@ describe('bot-players: bot 的發言台詞', () => {
   // withBots：p1 真人狼人 + 5 個 bot；p1 跟著 bot 狼人刀人後天亮
   const botDay = () => {
     const { state } = withBots();
-    return run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+    return run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] }], state);
   };
 
   it('bot 輪流發言時提到一位不是自己的存活玩家，並記住懷疑的人', () => {
@@ -1663,8 +1665,9 @@ describe('bot-players: bot 的發言台詞', () => {
   });
 
   it('bot 的 PK 發言替自己辯護並提到另一位平票的玩家', () => {
-    // 7 位真人 + 1 個 bot（bot:1 是村民）
+    // 7 位真人 + 1 個 bot（bot 是村民）
     const game = run([{ type: 'addBot', user: 'p1', count: 1 }, { type: 'start', user: 'p1' }], lobbyWith(7).state).state;
+    const bot = botId(game, 1);
     const day = skipLastWords(
       run(
         [
@@ -1676,18 +1679,18 @@ describe('bot-players: bot 的發言台詞', () => {
       ),
     ).state;
     const vote = run([{ type: 'endDiscussion', user: 'p1' }], day).state;
-    const other = vote.votes['bot:1'];
-    // bot:1 和 other 各 3 票平手
+    const other = vote.votes[bot];
+    // bot 和 other 各 3 票平手
     const humans = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].filter((h) => h !== other);
     const plan: [string, string][] = [
-      ...humans.slice(0, 3).map((h) => [h, 'bot:1'] as [string, string]),
+      ...humans.slice(0, 3).map((h) => [h, bot] as [string, string]),
       ...humans.slice(3, 5).map((h) => [h, other] as [string, string]),
       [other, 'abstain'],
     ];
     const pk = run(votes(plan), vote);
     expect(pk.state.phase).toBe('pkSpeech');
     const afterOther = run([{ type: 'endSpeech', user: other }], pk.state);
-    const line = announces(afterOther.events).find((t) => t.startsWith('🤖Bot1：'))!;
+    const line = announces(afterOther.events).find((t) => t.startsWith(`${mention(bot)}：`))!;
     expect(line).toContain(mention(other));
     expect(afterOther.state.phase).toBe('pkVote');
   });
@@ -1739,5 +1742,43 @@ describe('bot-players: 台詞有足夠的變化', () => {
     const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
     expect(new Set(Array.from({ length: 200 }, () => botLine('lastWords', '@C', r))).size).toBeGreaterThan(50);
     expect(new Set(Array.from({ length: 200 }, () => botLine('pk', '@C', r))).size).toBeGreaterThan(50);
+  });
+});
+
+describe('bot-players: bot 的顯示方式（隨機名字）', () => {
+  it('加入 bot 時取一個名字，名單顯示 🤖<名字>', () => {
+    const { state } = run([{ type: 'addBot', user: 'p1', count: 1 }], lobbyWith(1).state);
+    const name = mention(botId(state, 1));
+    expect(name).toMatch(/^🤖\S+$/);
+    expect(name).not.toMatch(/^🤖Bot\d/);
+  });
+
+  it('同一個房間的 bot 名字不重複', () => {
+    const { state } = run([{ type: 'addBot', user: 'p1', count: 11 }], lobbyWith(1).state);
+    const names = state.players.filter((p) => isBot(p.id)).map((p) => mention(p.id));
+    expect(names).toHaveLength(11);
+    expect(new Set(names).size).toBe(11);
+  });
+
+  it('名字不含角色相關的字、空白和冒號', () => {
+    for (let seed = 1; seed <= 300; seed++) {
+      let x = seed;
+      const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+      const name = randomBotName(r, new Set());
+      expect(name).not.toMatch(/狼|預言|女巫|獵|騎士|村民|\s|:/);
+    }
+  });
+
+  it('名字有足夠的變化', () => {
+    // 用 mulberry32：簡單的 LCG 連續兩次輸出有相關性，抽「形容詞 + 名詞」時會不夠分散
+    let a = 9;
+    const r = () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const names = new Set(Array.from({ length: 300 }, () => randomBotName(r, new Set())));
+    expect(names.size).toBeGreaterThan(150);
   });
 });

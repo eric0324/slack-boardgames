@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
+import { mention } from '../src/engine.js';
 import { buttonAction, GameHost, parseCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
@@ -201,7 +202,7 @@ describe('Slack：bot 玩家', () => {
     expect(parseCommand('addbot abc', 'U1', 'C1')).toBeNull();
   });
 
-  // rng 固定時：U1 狼人、bot:1 狼人、bot:2 預言家、bot:3 女巫、bot:4、bot:5 村民
+  // rng 固定時：U1 狼人、第 1 個 bot 狼人、第 2 個預言家、第 3 個女巫、第 4、5 個村民
   async function botGame(rng?: () => number) {
     const { client, calls } = fakeClient();
     const host = new GameHost(client, { rng: rng ?? (() => 0.99999), setTimer: () => {} });
@@ -220,25 +221,32 @@ describe('Slack：bot 玩家', () => {
   });
 
   it('狼人有真人也有 bot：私密對話只拉真人，名單列出 bot', async () => {
-    const { calls } = await botGame();
+    const { host, calls } = await botGame();
     expect(calls).toContainEqual({ method: 'conversations.open', args: { users: 'U1' } });
     const wolfPosts = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1');
-    expect(wolfPosts.map((c) => c.args.text).join('\n')).toContain('🤖Bot1');
+    const bot1 = host.games.get('C1')!.players[1].id;
+    expect(wolfPosts.map((c) => c.args.text).join('\n')).toContain(mention(bot1));
   });
 
   it('狼人全部都是 bot 時，不建立狼人的私密對話', async () => {
-    // 第一次交換把 U1 換成村民，之後不再交換：狼人是 bot:1 和 bot:5
-    const seq = [0, 0.99999, 0.99999, 0.99999, 0.99999];
-    const { host, calls } = await botGame(() => seq.shift() ?? 0.99999);
+    // bot 加完之後才換上控制發牌的數字：第一次交換把 U1 換成村民，之後不再交換，狼人是第 1 和第 5 個 bot
+    let seq: number[] = [];
+    const { client, calls } = fakeClient();
+    const host = new GameHost(client, { rng: () => seq.shift() ?? 0.99999, setTimer: () => {} });
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.command('C1', 'U1', 'alice', 'addbot 5');
+    seq = [0, 0.99999, 0.99999, 0.99999, 0.99999];
+    await host.command('C1', 'U1', 'alice', 'start');
     expect(host.games.get('C1')!.players.find((p) => p.id === 'U1')!.role).toBe('villager');
     const wolfOpens = calls.filter((c) => c.method === 'conversations.open' && c.args.users !== 'U1');
     expect(wolfOpens).toEqual([]);
   });
 
-  it('按鈕上的 bot 顯示成 🤖Bot<編號>', async () => {
-    const { calls } = await botGame();
+  it('按鈕上的 bot 顯示成 🤖<名字>', async () => {
+    const { host, calls } = await botGame();
+    const bot2 = host.games.get('C1')!.players[2].id;
     const wolfPrompt = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1').find((c) => buttonsOf(c).length)!;
-    expect(buttonsOf(wolfPrompt).map((b: any) => b.text.text)).toContain('🤖Bot2');
+    expect(buttonsOf(wolfPrompt).map((b: any) => b.text.text)).toContain(mention(bot2));
   });
 });
 
