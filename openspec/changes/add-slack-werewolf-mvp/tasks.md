@@ -119,4 +119,4 @@
 
 ## 23. 條列式使用說明
 
-- [ ] 23.1 Slack adapter 的使用說明改成條列式（每個指令一行，含誰可以用和說明，最後附 wiki 指令頁連結），`/werewolf help`、空白和不認識的子指令都回覆；確認 game-lobby「使用說明」的 scenarios 測試通過
+- [x] 23.1 Slack adapter 的使用說明改成條列式（每個指令一行，含誰可以用和說明，最後附 wiki 指令頁連結），`/werewolf help`、空白和不認識的子指令都回覆；確認 game-lobby「使用說明」的 scenarios 測試通過

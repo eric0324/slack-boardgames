@@ -1,5 +1,5 @@
 // Slack adapter：把 slash command 和按鈕轉成 engine action，再把 engine event 轉成 Slack API 呼叫。
-import { applyAction, isBot, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
+import { applyAction, isBot, MAX_PLAYERS, mention, RULES_URL, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
 import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
 
@@ -22,7 +22,18 @@ export interface HostOptions {
   setTimer?: (fn: () => void, ms: number) => void;
 }
 
-const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf next` 跳過目前的發言者、`/werewolf vote` 直接進入投票、`/werewolf cancel` 取消遊戲、`/werewolf stats [@某人]` 查詢戰績';
+const HELP = [
+  '*狼人殺指令*',
+  '• `/werewolf new`：開房（任何人）',
+  '• `/werewolf addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/werewolf removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/werewolf start`：開始遊戲，需要 6～12 人（房主）',
+  '• `/werewolf next`：跳過目前的發言者或遺言（房主）',
+  '• `/werewolf vote`：結束發言或討論，直接投票（房主）',
+  '• `/werewolf cancel`：取消遊戲（房主）',
+  '• `/werewolf stats [@某人]`：查詢自己或別人在這個頻道的戰績（任何人）',
+  `📖 完整說明：<${encodeURI('https://github.com/eric0324/slack-werewolve/wiki/指令')}|指令>、<${RULES_URL}|遊戲規則>`,
+].join('\n');
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {
   const [sub, arg, ...rest] = text.trim().split(/\s+/);

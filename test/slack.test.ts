@@ -382,3 +382,27 @@ describe('Slack：戰績查詢', () => {
     expect(stats.stats('C1', 'U3')!.total).toEqual({ games: 1, wins: 0 });
   });
 });
+
+describe('Slack：使用說明', () => {
+  const helpFor = async (text: string) => {
+    const { host, calls } = setup();
+    await host.command('C1', 'U1', 'alice', text);
+    return calls.at(-1)!;
+  };
+
+  it('/werewolf help 回覆條列式使用說明，每個指令一行，最後附 wiki 連結', async () => {
+    const call = await helpFor('help');
+    expect(call).toMatchObject({ method: 'chat.postEphemeral', args: { user: 'U1' } });
+    const lines = call.args.text.split('\n');
+    for (const cmd of ['new', 'addbot', 'removebot', 'start', 'next', 'vote', 'cancel', 'stats']) {
+      expect(lines.filter((l: string) => l.includes(`/werewolf ${cmd}`)).length, cmd).toBe(1);
+    }
+    expect(lines.at(-1)).toContain('https://github.com/eric0324/slack-werewolve/wiki/');
+  });
+
+  it('只輸入 /werewolf 或不認識的子指令，回覆同一份說明', async () => {
+    const help = (await helpFor('help')).args.text;
+    expect((await helpFor('')).args.text).toBe(help);
+    expect((await helpFor('dance')).args.text).toBe(help);
+  });
+});
