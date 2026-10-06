@@ -148,4 +148,4 @@
 
 ## 30. bot 改用英文名字
 
-- [ ] 30.1 bot 名字庫改成簡單的英文名字（至少 30 個），同一個房間不重複；確認 bot-players「bot 的顯示方式」的 scenarios 測試通過，並更新 wiki
+- [x] 30.1 bot 名字庫改成簡單的英文名字（至少 30 個），同一個房間不重複；確認 bot-players「bot 的顯示方式」的 scenarios 測試通過，並更新 wiki
