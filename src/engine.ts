@@ -245,13 +245,63 @@ function promptWitch(c: Ctx) {
   const lines: string[] = [];
   if (s.potions.antidote) lines.push(target ? `今晚被殺的是 ${mention(target)}。` : '今晚沒有人被殺。');
   lines.push('一晚最多使用一瓶藥。');
+  const opts = witchOptions(s, witch.id);
+  c.events.push({ type: 'prompt', kind: 'witch', audience: 'user', user: witch.id, text: lines.join('\n'), options: opts });
+}
+
+function witchOptions(s: GameState, witch: string): Option[] {
   const opts: Option[] = [];
-  if (canSave(s, witch.id)) opts.push({ value: 'save', label: '使用解藥' });
+  if (canSave(s, witch)) opts.push({ value: 'save', label: '使用解藥' });
   if (s.potions.poison) {
-    for (const p of alive(s)) if (p.id !== witch.id) opts.push({ value: `poison:${p.id}`, label: `毒 ${p.id}` });
+    for (const p of alive(s)) if (p.id !== witch) opts.push({ value: `poison:${p.id}`, label: `毒 ${p.id}` });
   }
   opts.push({ value: 'skip', label: '不使用' });
-  c.events.push({ type: 'prompt', kind: 'witch', audience: 'user', user: witch.id, text: lines.join('\n'), options: opts });
+  return opts;
+}
+
+const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
+const aliveBot = (s: GameState, role: Role) => aliveWith(s, role).find((p) => isBot(p.id));
+
+// 找出下一個輪到 bot 的行動；沒有就回傳 null
+function nextBotAction(s: GameState, rng: Rng): GameAction | null {
+  const n = s.night;
+  if (s.phase === 'night' && n) {
+    if (n.wolfTarget === undefined) {
+      const wolf = aliveWith(s, 'werewolf').find((p) => isBot(p.id) && !n.wolfVotes[p.id]);
+      const prey = alive(s).filter((p) => p.role !== 'werewolf').map((p) => p.id);
+      if (wolf) return { type: 'wolfVote', user: wolf.id, target: pick(prey, rng) };
+    }
+    const seer = aliveBot(s, 'seer');
+    if (seer && !n.seerDone) {
+      const others = alive(s).filter((p) => p.id !== seer.id).map((p) => p.id);
+      return { type: 'seerCheck', user: seer.id, target: pick(others, rng) };
+    }
+    const witch = aliveBot(s, 'witch');
+    if (witch && n.wolfTarget !== undefined && !n.witchDone) {
+      return { type: 'witchAct', user: witch.id, choice: pick(witchOptions(s, witch.id), rng).value };
+    }
+  }
+  if (s.phase === 'vote' || s.phase === 'pkVote') {
+    const voter = s.voters.find((v) => isBot(v) && isAlive(s, v) && !s.votes[v]);
+    if (voter) {
+      const choices = s.candidates.filter((id) => id !== voter);
+      return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
+    }
+  }
+  if (s.phase === 'hunter' && s.hunter && isBot(s.hunter.id)) {
+    const targets = [...alive(s).map((p) => p.id), 'none'];
+    return { type: 'hunterShoot', user: s.hunter.id, target: pick(targets, rng) };
+  }
+  return null;
+}
+
+// 替所有輪到行動的 bot 立刻行動，直到沒有 bot 需要行動為止
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+    maybeResolveNight(c);
+  }
 }
 
 function maybeResolveNight(c: Ctx) {
@@ -400,8 +450,10 @@ const reply = (c: Ctx, to: string, text: string) => {
   return false;
 };
 
+type GameAction = Exclude<Action, { type: 'new' }>;
+
 // 回傳 true 代表 state 有變動
-function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
+function handle(c: Ctx, action: GameAction): boolean {
   const s = c.s;
   switch (action.type) {
     case 'join': {
@@ -599,6 +651,9 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
-  if (changed) maybeResolveNight(c);
+  if (changed) {
+    maybeResolveNight(c);
+    runBots(c);
+  }
   return { state: changed ? c.s : state, events: c.events };
 }

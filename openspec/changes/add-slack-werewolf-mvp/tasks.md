@@ -55,5 +55,5 @@
 ## 10. Bot 玩家
 
 - [x] 10.1 Engine 支援 `addBot`、`removeBot` action（只有房主、只有房間階段、上限 12 人、從最後加入的開始移除），bot 顯示成「🤖Bot<編號>」；確認 bot-players 中「加入與移除 bot」「bot 的顯示方式」的 scenarios 測試通過
-- [ ] 10.2 Engine 在每次處理完 action 後，替所有輪到行動的 bot 隨機、立刻行動（狼人不刀狼人、投票不投自己也不棄票）；確認「bot 自動行動」的 scenarios 測試通過，並補一個 6 人局中 5 個 bot 的整局測試，確認遊戲會跑到結束
+- [x] 10.2 Engine 在每次處理完 action 後，替所有輪到行動的 bot 隨機、立刻行動（狼人不刀狼人、投票不投自己也不棄票）；確認「bot 自動行動」的 scenarios 測試通過，並補一個 6 人局中 5 個 bot 的整局測試，確認遊戲會跑到結束
 - [ ] 10.3 Slack adapter 支援 `/werewolf addbot [n]`、`/werewolf removebot [n]`，不私訊 bot、不把提示送給 bot、狼人私密對話只拉真人、按鈕上的 bot 顯示名字；用假的 Slack client 確認「bot 不會收到訊息」的 scenarios 測試通過，並更新 README 的玩法說明

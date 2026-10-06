@@ -946,3 +946,63 @@ describe('bot-players: bot 的顯示方式', () => {
     expect(isBot('U123')).toBe(false);
   });
 });
+
+// p1 真人 + 5 個 bot。rng 固定時：p1、bot:1 狼人，bot:2 預言家，bot:3 女巫，bot:4、bot:5 村民
+const withBots = () =>
+  run([{ type: 'addBot', user: 'p1', count: 5 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+const roleOf = (s: GameState, id: string) => s.players.find((p) => p.id === id)!.role;
+
+describe('bot-players: bot 自動行動', () => {
+  it('bot 狼人立刻選好存活的非狼人，bot 預言家立刻查驗', () => {
+    const { state, events } = withBots();
+    const target = state.night!.wolfVotes['bot:1'];
+    expect(target).toBeDefined();
+    expect(roleOf(state, target)).not.toBe('werewolf');
+    expect(state.night!.seerDone).toBe(true);
+    expect(wolfChatText(events)).toContain('🤖Bot1 選擇擊殺');
+  });
+
+  it('真人行動完後，其他都是 bot，夜晚立刻結算', () => {
+    const { state } = withBots();
+    const after = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state).state;
+    expect(after.phase).not.toBe('night');
+    expect(after.night!.witchDone).toBe(true);
+  });
+
+  it('進入投票時每個存活的 bot 立刻投給不是自己的候選人', () => {
+    const { state } = withBots();
+    const day = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] },
+        { type: 'endDiscussion', user: 'p1' },
+      ],
+      state,
+    ).state;
+    expect(day.phase).toBe('vote');
+    const bots = day.players.filter((p) => p.alive && isBot(p.id));
+    for (const b of bots) {
+      expect(day.votes[b.id]).toBeDefined();
+      expect(day.votes[b.id]).not.toBe(b.id);
+      expect(day.votes[b.id]).not.toBe('abstain');
+    }
+  });
+});
+
+describe('bot-players: 整局測試', () => {
+  // 簡單的 LCG，讓每個種子的結果都固定
+  const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+
+  it('1 位真人 + 5 個 bot，真人什麼都不做，遊戲一定會跑到結束', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = seeded(seed);
+      let s = applyAction(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyAction(s, { type: 'addBot', user: 'p1', count: 5 }, r).state;
+      s = applyAction(s, { type: 'start', user: 'p1' }, r).state;
+      for (let step = 0; step < 200 && s.phase !== 'ended'; step++) {
+        const id = Object.values(s.timers)[0];
+        s = applyAction(s, { type: 'timeout', id: id! }, r).state;
+      }
+      expect(s.phase, `seed ${seed}`).toBe('ended');
+    }
+  });
+});
