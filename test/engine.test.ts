@@ -74,3 +74,59 @@ describe('game-lobby: 加入與離開房間', () => {
     expect(events.some((e) => e.type === 'announce' && e.text.includes('取消'))).toBe(true);
   });
 });
+
+describe('game-lobby: 開始遊戲', () => {
+  it('6～12 人時房主可以開始，按鈕失效', () => {
+    for (const n of [6, 12]) {
+      const { state } = lobbyWith(n);
+      const { state: after, events } = run([{ type: 'start', user: 'p1' }], state);
+      expect(after.phase).not.toBe('lobby');
+      expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', open: false }));
+    }
+  });
+
+  it('人數不足時拒絕，告訴房主人數', () => {
+    const { state } = lobbyWith(5);
+    const { state: after, events } = run([{ type: 'start', user: 'p1' }], state);
+    expect(after.phase).toBe('lobby');
+    expect(ephemeralTo(events, 'p1')).toMatchObject({ text: expect.stringContaining('5') });
+  });
+
+  it('非房主不能開始', () => {
+    const { state } = lobbyWith(6);
+    const { state: after, events } = run([{ type: 'start', user: 'p2' }], state);
+    expect(after.phase).toBe('lobby');
+    expect(ephemeralTo(events, 'p2')).toBeDefined();
+  });
+
+  it('遊戲開始後不能加入', () => {
+    const { state } = run([{ type: 'start', user: 'p1' }], lobbyWith(6).state);
+    const { state: after, events } = run([{ type: 'join', user: 'x' }], state);
+    expect(after.players).toHaveLength(6);
+    expect(ephemeralTo(events, 'x')).toMatchObject({ text: expect.stringContaining('已經開始') });
+  });
+
+  it('遊戲開始後不能離開', () => {
+    const { state } = run([{ type: 'start', user: 'p1' }], lobbyWith(6).state);
+    const { state: after, events } = run([{ type: 'leave', user: 'p2' }], state);
+    expect(after.players).toHaveLength(6);
+    expect(ephemeralTo(events, 'p2')).toMatchObject({ text: expect.stringContaining('已經開始') });
+  });
+});
+
+describe('game-lobby: 取消遊戲', () => {
+  it('房主取消後遊戲結束，之後的操作都沒有作用', () => {
+    const { state } = run([{ type: 'start', user: 'p1' }], lobbyWith(6).state);
+    const { state: after, events } = run([{ type: 'cancel', user: 'p1' }], state);
+    expect(after.phase).toBe('ended');
+    expect(events.some((e) => e.type === 'announce' && e.text.includes('取消'))).toBe(true);
+    expect(run([{ type: 'join', user: 'x' }], after).events).toEqual([]);
+  });
+
+  it('非房主不能取消', () => {
+    const { state } = lobbyWith(6);
+    const { state: after, events } = run([{ type: 'cancel', user: 'p2' }], state);
+    expect(after.phase).toBe('lobby');
+    expect(ephemeralTo(events, 'p2')).toBeDefined();
+  });
+});
