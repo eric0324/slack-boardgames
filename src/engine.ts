@@ -38,6 +38,7 @@ const ROLE_HELP: Record<Role, string> = {
 export const isBot = (id: string) => id.startsWith('bot:');
 export const mention = (id: string) => (isBot(id) ? `🤖Bot${id.slice(4)}` : `<@${id}>`);
 
+export const RULES_URL = encodeURI('https://github.com/eric0324/slack-werewolve/wiki/遊戲規則');
 export const ACTION_MS = 60_000;
 const WOLF_REMIND_BEFORE_MS = 30_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間
@@ -194,7 +195,7 @@ function announceStart(c: Ctx) {
   c.events.push(
     {
       type: 'announce',
-      text: `🎲 遊戲開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n角色配置：${setup}\n身分已經用私訊傳給每個人，請到和 bot 的私訊查看。`,
+      text: `🎲 遊戲開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n角色配置：${setup}\n身分已經用私訊傳給每個人，請到和 bot 的私訊查看。\n📖 第一次玩？先看 <${RULES_URL}|遊戲規則>`,
       gif: 'start',
     },
     ...s.players.map((p): GameEvent => ({

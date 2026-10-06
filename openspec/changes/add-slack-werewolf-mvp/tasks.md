@@ -82,5 +82,5 @@
 
 ## 16. 規則 wiki
 
-- [ ] 16.1 開始公告附上 wiki「遊戲規則」頁面的連結；確認 announcement-gifs「開始公告附上規則連結」的 scenario 測試通過
+- [x] 16.1 開始公告附上 wiki「遊戲規則」頁面的連結；確認 announcement-gifs「開始公告附上規則連結」的 scenario 測試通過
 - [ ] 16.2 依照目前的 specs 撰寫 GitHub wiki 的「遊戲規則」頁面和首頁，推送到 wiki repo，並確認連結打得開
