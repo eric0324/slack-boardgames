@@ -73,6 +73,7 @@ export interface GameState {
   night?: NightState;
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
+  winner?: 'good' | 'wolves'; // 分出勝負後才有；取消的遊戲沒有
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -85,6 +86,7 @@ export interface GameState {
 
 export type Action =
   | { type: 'new'; user: string; channel: string }
+  | { type: 'rematch'; user: string; channel: string }
   | { type: 'join'; user: string }
   | { type: 'leave'; user: string }
   | { type: 'start'; user: string }
@@ -532,7 +534,17 @@ function checkGameOver(c: Ctx): boolean {
     .map((p) => `${mention(p.id)}：${ROLE_NAME[p.role!]}（${p.alive ? '存活' : '死亡'}）`)
     .join('\n');
   const title = winner === 'good' ? '🎉 遊戲結束，好人陣營獲勝！' : '🐺 遊戲結束，狼人陣營獲勝！';
-  c.events.push({ type: 'announce', text: `${title}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' });
+  c.s.winner = winner;
+  c.events.push(
+    { type: 'announce', text: `${title}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' },
+    {
+      type: 'prompt',
+      kind: 'rematch',
+      audience: 'channel',
+      text: '要再來一局嗎？',
+      options: [{ value: 'rematch', label: '再來一局' }],
+    },
+  );
   return true;
 }
 
@@ -544,7 +556,7 @@ const reply = (c: Ctx, to: string, text: string) => {
   return false;
 };
 
-type GameAction = Exclude<Action, { type: 'new' }>;
+type GameAction = Exclude<Action, { type: 'new' } | { type: 'rematch' }>;
 
 // 只有這局的玩家才能做的操作（遊戲按鈕）
 const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote'];
@@ -745,27 +757,19 @@ function handle(c: Ctx, action: GameAction): boolean {
 }
 
 export function applyAction(state: GameState | undefined, action: Action, rng: Rng): Result {
+  const busy = (user: string) => ({ state: state!, events: [{ type: 'ephemeral', to: user, text: '這個頻道已經有遊戲了。' } as GameEvent] });
   if (action.type === 'new') {
-    if (state && state.phase !== 'ended') {
-      return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (state && state.phase !== 'ended') return busy(action.user);
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return busy(action.user);
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
-    const created: GameState = {
-      channel: action.channel,
-      host: action.user,
-      phase: 'lobby',
-      players: [{ id: action.user, alive: true }],
-      day: 0,
-      timerSeq: state?.timerSeq ?? 0, // 接續上一局的編號，舊計時器的 timeout 才不會被誤認
-      timers: {},
-      potions: { antidote: true, poison: true },
-      lastDeaths: [],
-      speakers: [],
-      lastWords: [],
-      votes: {},
-      candidates: [],
-      voters: [],
-    };
-    return { state: created, events: [lobbyEvent(created)] };
+    return createLobby(state, action.user, action.channel);
   }
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
@@ -775,4 +779,24 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
     runBots(c);
   }
   return { state: changed ? c.s : state, events: c.events };
+}
+
+function createLobby(prev: GameState | undefined, host: string, channel: string): Result {
+  const created: GameState = {
+    channel,
+    host,
+    phase: 'lobby',
+    players: [{ id: host, alive: true }],
+    day: 0,
+    timerSeq: prev?.timerSeq ?? 0, // 接續上一局的編號，舊計時器的 timeout 才不會被誤認
+    timers: {},
+    potions: { antidote: true, poison: true },
+    lastDeaths: [],
+    speakers: [],
+    lastWords: [],
+    votes: {},
+    candidates: [],
+    voters: [],
+  };
+  return { state: created, events: [lobbyEvent(created)] };
 }

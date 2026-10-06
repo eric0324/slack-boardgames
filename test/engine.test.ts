@@ -1334,3 +1334,38 @@ describe('game-lobby: 不在遊戲中的人不能參與', () => {
     }
   });
 });
+
+describe('win-condition: 再來一局', () => {
+  it('分出勝負後貼出「再來一局」按鈕', () => {
+    const [p] = prompts(wolvesWinTonight().events, 'rematch');
+    expect(p).toMatchObject({ audience: 'channel', text: expect.stringContaining('再來一局') });
+    expect(p.options).toEqual([{ value: 'rematch', label: '再來一局' }]);
+  });
+
+  it('上一局的玩家（死亡也可以）開新的一局：空房間，按的人當房主', () => {
+    const { state, events } = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], wolvesWinTonight().state);
+    expect(state).toMatchObject({ phase: 'lobby', host: 'p3' });
+    expect(ids(state)).toEqual(['p3']);
+    expect(events).toContainEqual({ type: 'lobby', host: 'p3', players: ['p3'], open: true });
+  });
+
+  it('不是上一局的玩家不能開', () => {
+    const ended = wolvesWinTonight().state;
+    const { state, events } = run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended);
+    expect(state).toBe(ended);
+    expect(ephemeralTo(events, 'X')).toMatchObject({ text: '只有上一局的玩家可以開新的一局。' });
+  });
+
+  it('已經開了新房間就不會再開', () => {
+    const lobby = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], wolvesWinTonight().state).state;
+    const { state, events } = run([{ type: 'rematch', user: 'p5', channel: 'C1' }], lobby);
+    expect(state.host).toBe('p3');
+    expect(ephemeralTo(events, 'p5')).toMatchObject({ text: '這個頻道已經有遊戲了。' });
+  });
+
+  it('取消的遊戲沒有再來一局', () => {
+    const { state, events } = run([{ type: 'cancel', user: 'p1' }], started(6).state);
+    expect(prompts(events, 'rematch')).toEqual([]);
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], state).events).toEqual([]);
+  });
+});
