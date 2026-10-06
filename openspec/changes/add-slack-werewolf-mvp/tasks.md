@@ -62,3 +62,8 @@
 
 - [x] 11.1 Engine 的 `announce` event 加上代表時刻的 `gif` 欄位（例如 `night`、`dawnDeath`、`dawnPeace`），公告開頭加上 emoji，開始公告提醒查看私訊；確認 announcement-gifs 中 emoji、提醒私訊，以及各時刻對應正確 `gif` 的測試通過
 - [x] 11.2 新增 `src/gifs.ts` 設定檔，從 Giphy 挑選每個時刻的初始 GIF（使用小尺寸版本的網址），並確認每個網址都讀得到；Slack adapter 把有 `gif` 的公告送成文字加 image block，隨機選一張，沒有設定時只送文字；用假的 Slack client 確認「多張 GIF 隨機選」「沒有設定 GIF」的 scenarios 測試通過，README 說明怎麼替換 GIF
+
+## 12. 輪流發言
+
+- [ ] 12.1 Engine 用輪流發言取代自由討論：隨機起點、依加入順序、跳過死亡玩家、每人 40 秒、發言者結束或房主 `next` 跳過、bot 自動過、講完直接投票，PK 發言也改成輪流；確認 day-phase「輪流發言」和「PK 發言」的 scenarios 測試通過，並更新原本依賴 5 分鐘討論的測試
+- [ ] 12.2 Slack adapter 支援「結束發言」按鈕和 `/werewolf next` 指令，更新 README 玩法說明和 manifest 的指令提示；用假的 Slack client 確認按鈕和指令會轉成正確的 action
