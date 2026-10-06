@@ -139,8 +139,13 @@ describe('role-assignment: 依人數配置角色', () => {
     expect(count(dealRoles(6, Math.random))).toEqual({ werewolf: 2, seer: 1, witch: 1, villager: 2 });
   });
 
-  it('12 人局：4 狼、1 預言家、1 女巫、1 獵人、5 村民', () => {
-    expect(count(dealRoles(12, Math.random))).toEqual({ werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 5 });
+  it('12 人局：4 狼、1 預言家、1 女巫、1 獵人、1 騎士、4 村民', () => {
+    expect(count(dealRoles(12, Math.random))).toEqual({ werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 });
+  });
+
+  it('9 人以上才有騎士', () => {
+    expect(count(dealRoles(8, Math.random)).knight).toBeUndefined();
+    for (let n = 9; n <= 12; n++) expect(count(dealRoles(n, Math.random)).knight).toBe(1);
   });
 
   it('6～12 人的角色總數都等於玩家數', () => {
@@ -459,7 +464,7 @@ describe('night-phase: 夜晚結算', () => {
 });
 
 // 用角色字串快速建立玩家，大寫開頭代表還活著，例如 'W' 活著的狼人、'w' 死掉的狼人
-const ROLE_CODE: Record<string, Role> = { w: 'werewolf', v: 'villager', s: 'seer', i: 'witch', h: 'hunter' };
+const ROLE_CODE: Record<string, Role> = { w: 'werewolf', v: 'villager', s: 'seer', i: 'witch', h: 'hunter', k: 'knight' };
 const table = (codes: string) =>
   [...codes].map((ch, i) => ({ id: `p${i + 1}`, role: ROLE_CODE[ch.toLowerCase()], alive: ch !== ch.toLowerCase() }));
 
@@ -474,6 +479,11 @@ describe('win-condition: 屠邊勝負規則', () => {
 
   it('神職全滅：狼人獲勝，即使村民還活著', () => {
     expect(checkWinner(table('WwsihVV'))).toBe('wolves');
+  });
+
+  it('騎士算神職：騎士還活著時，其他神職死光也不算狼人獲勝', () => {
+    expect(checkWinner(table('WwsihKVV'))).toBeNull();
+    expect(checkWinner(table('WwsihkVV'))).toBe('wolves');
   });
 
   it('6 人局沒有獵人：預言家和女巫都死了，狼人獲勝', () => {

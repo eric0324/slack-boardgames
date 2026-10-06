@@ -5,17 +5,17 @@ export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
 export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
-export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
+export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
 export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
   6: { werewolf: 2, seer: 1, witch: 1, villager: 2 },
   7: { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 2 },
   8: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 2 },
-  9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 3 },
-  10: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 4 },
-  11: { werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 4 },
-  12: { werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 5 },
+  9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 2 },
+  10: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  11: { werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  12: { werewolf: 4, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 },
 };
 
 export const ROLE_NAME: Record<Role, string> = {
@@ -23,6 +23,7 @@ export const ROLE_NAME: Record<Role, string> = {
   seer: '預言家',
   witch: '女巫',
   hunter: '獵人',
+  knight: '騎士',
   villager: '村民',
 };
 
@@ -31,6 +32,7 @@ const ROLE_HELP: Record<Role, string> = {
   seer: '每晚可以查驗一位玩家是好人還是狼人。',
   witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
   hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
+  knight: '整局一次，白天輪流發言或自由討論時可以翻牌向一位玩家決鬥：對方是狼人就出局並直接入夜，對方是好人則你出局。',
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
 
@@ -150,7 +152,7 @@ export function dealRoles(n: number, rng: Rng): Role[] {
   );
 }
 
-const GODS: Role[] = ['seer', 'witch', 'hunter'];
+const GODS: Role[] = ['seer', 'witch', 'hunter', 'knight'];
 
 // 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅或神職全滅 → 狼人贏
 export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
