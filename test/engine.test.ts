@@ -166,3 +166,36 @@ describe('role-assignment: 隨機發牌', () => {
     expect(a).not.toEqual(b);
   });
 });
+
+// rng 固定時，8 人局的發牌順序：p1~p3 狼人、p4 預言家、p5 女巫、p6 獵人、p7~p8 村民
+const started = (n: number) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state);
+
+describe('role-assignment: 私下通知身分', () => {
+  it('每位玩家都收到私訊，裡面有自己的角色和能力說明', () => {
+    const { state, events } = started(8);
+    for (const p of state.players) {
+      const dm = events.find((e) => e.type === 'dm' && e.to === p.id);
+      expect(dm).toBeDefined();
+    }
+    expect(events).toContainEqual(expect.objectContaining({ type: 'dm', to: 'p1', text: expect.stringContaining('狼人') }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'dm', to: 'p4', text: expect.stringContaining('預言家') }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'dm', to: 'p7', text: expect.stringContaining('村民') }));
+  });
+
+  it('頻道公告只有玩家名單和角色數量，不寫誰是什麼角色', () => {
+    const { events } = started(8);
+    const texts = events.filter((e) => e.type === 'announce').map((e) => (e as { text: string }).text).join('\n');
+    expect(texts).toContain('<@p8>');
+    expect(texts).toContain('3 狼人');
+    expect(texts).not.toMatch(/<@p\d+>\s*[:：]?\s*(是)?\s*(狼人|預言家|女巫|獵人|村民)/);
+  });
+});
+
+describe('role-assignment: 狼人互相認識', () => {
+  it('所有狼人在同一個私密對話，裡面列出狼人名單', () => {
+    const { events } = started(8);
+    const chat = events.find((e) => e.type === 'wolfChat');
+    expect(chat).toMatchObject({ wolves: ['p1', 'p2', 'p3'] });
+    for (const w of ['p1', 'p2', 'p3']) expect((chat as { text: string }).text).toContain(`<@${w}>`);
+  });
+});

@@ -14,7 +14,7 @@
 ## 3. Engine：發牌（role-assignment）
 
 - [x] 3.1 實作角色配置表和注入 `rng` 的隨機發牌，確認 6～12 人的配置數量、每人剛好一個角色的測試通過
-- [ ] 3.2 開始遊戲時，對每個人發出身分私訊 event，對狼人發出 `wolfChat` event，頻道公告不帶任何身分；確認「私下通知身分」「狼人互相認識」的 scenarios 測試通過
+- [x] 3.2 開始遊戲時，對每個人發出身分私訊 event，對狼人發出 `wolfChat` event，頻道公告不帶任何身分；確認「私下通知身分」「狼人互相認識」的 scenarios 測試通過
 
 ## 4. Engine：夜晚（night-phase）
 

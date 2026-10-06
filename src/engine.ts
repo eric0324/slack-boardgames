@@ -18,6 +18,24 @@ export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
   12: { werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 5 },
 };
 
+export const ROLE_NAME: Record<Role, string> = {
+  werewolf: '狼人',
+  seer: '預言家',
+  witch: '女巫',
+  hunter: '獵人',
+  villager: '村民',
+};
+
+const ROLE_HELP: Record<Role, string> = {
+  werewolf: '每晚和其他狼人一起選一位玩家擊殺。殺光所有村民或所有神職就獲勝。',
+  seer: '每晚可以查驗一位玩家是好人還是狼人。',
+  witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
+  hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
+  villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
+};
+
+export const mention = (id: string) => `<@${id}>`;
+
 export interface Player {
   id: string;
   alive: boolean;
@@ -41,6 +59,8 @@ export type Action =
 export type GameEvent =
   | { type: 'announce'; text: string }
   | { type: 'ephemeral'; to: string; text: string }
+  | { type: 'dm'; to: string; text: string }
+  | { type: 'wolfChat'; wolves: string[]; text: string }
   | { type: 'lobby'; host: string; players: string[]; open: boolean };
 
 export type Rng = () => number;
@@ -70,6 +90,22 @@ const lobbyEvent = (s: GameState): GameEvent => ({
   players: s.players.map((p) => p.id),
   open: s.phase === 'lobby',
 });
+
+function startEvents(s: GameState): GameEvent[] {
+  const setup = Object.entries(ROLE_TABLE[s.players.length])
+    .map(([role, k]) => `${k} ${ROLE_NAME[role as Role]}`)
+    .join('、');
+  const wolves = s.players.filter((p) => p.role === 'werewolf').map((p) => p.id);
+  return [
+    { type: 'announce', text: `遊戲開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n角色配置：${setup}` },
+    ...s.players.map((p): GameEvent => ({
+      type: 'dm',
+      to: p.id,
+      text: `你的身分是「${ROLE_NAME[p.role!]}」。${ROLE_HELP[p.role!]}`,
+    })),
+    { type: 'wolfChat', wolves, text: `這裡是狼人的私密對話。狼人：${wolves.map(mention).join(' ')}` },
+  ];
+}
 
 export function applyAction(state: GameState | undefined, action: Action, rng: Rng): Result {
   if (action.type === 'new') {
@@ -110,7 +146,7 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       const roles = dealRoles(n, rng);
       const players = state.players.map((p, i) => ({ ...p, role: roles[i] }));
       const next: GameState = { ...state, phase: 'night', players };
-      return { state: next, events: [lobbyEvent(next)] };
+      return { state: next, events: [lobbyEvent(next), ...startEvents(next)] };
     }
     case 'cancel': {
       if (action.user !== state.host) return reply(state, action.user, '只有房主可以取消遊戲。');
