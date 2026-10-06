@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type Phase = 'lobby' | 'night' | 'hunter' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -73,6 +73,7 @@ export interface GameState {
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
+  hunter?: { id: string; next: 'discussion' | 'night' }; // 正在等待開槍的獵人
 }
 
 export type Action =
@@ -86,6 +87,7 @@ export type Action =
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
   | { type: 'endDiscussion'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
+  | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -267,7 +269,40 @@ function dawn(c: Ctx) {
     : '天亮了。昨晚是平安夜。';
   c.events.push({ type: 'announce', text });
   if (checkGameOver(c)) return;
-  startDiscussion(c);
+  const n = c.s.night!;
+  const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
+  const hunter = c.s.players.find((p) => p.id === shotByWolves && p.role === 'hunter');
+  if (hunter) startHunter(c, hunter.id, 'discussion');
+  else startDiscussion(c);
+}
+
+function startHunter(c: Ctx, id: string, next: 'discussion' | 'night') {
+  const s = c.s;
+  s.phase = 'hunter';
+  s.timers = {};
+  s.hunter = { id, next };
+  c.events.push({
+    type: 'prompt',
+    kind: 'hunterShoot',
+    audience: 'user',
+    user: id,
+    text: '你死亡了，可以開槍帶走一位玩家。',
+    options: [...options(alive(s).map((p) => p.id)), { value: 'none', label: '不開槍' }],
+  });
+  startTimer(c, 'phase', ACTION_MS);
+}
+
+function finishHunter(c: Ctx, target: string) {
+  const s = c.s;
+  const { id, next } = s.hunter!;
+  s.hunter = undefined;
+  if (target !== 'none') {
+    s.players.find((p) => p.id === target)!.alive = false;
+    c.events.push({ type: 'announce', text: `獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。` });
+    if (checkGameOver(c)) return;
+  }
+  if (next === 'discussion') startDiscussion(c);
+  else enterNight(c);
 }
 
 function startDiscussion(c: Ctx) {
@@ -340,7 +375,8 @@ function exile(c: Ctx, id: string) {
   c.s.players.find((p) => p.id === id)!.alive = false;
   c.events.push({ type: 'announce', text: `${mention(id)} 被放逐了。` });
   if (checkGameOver(c)) return;
-  enterNight(c);
+  if (c.s.players.find((p) => p.id === id)!.role === 'hunter') startHunter(c, id, 'night');
+  else enterNight(c);
 }
 
 // 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true
@@ -462,6 +498,12 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       if (s.voters.every((v) => s.votes[v])) endVote(c);
       return true;
     }
+    case 'hunterShoot': {
+      if (s.phase !== 'hunter' || action.user !== s.hunter?.id) return false;
+      if (action.target !== 'none' && !isAlive(s, action.target)) return false;
+      finishHunter(c, action.target);
+      return true;
+    }
     case 'timeout': {
       const n = s.night;
       if (action.id === s.timers.wolves && n) {
@@ -487,6 +529,10 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       }
       if (action.id === s.timers.phase && (s.phase === 'vote' || s.phase === 'pkVote')) {
         endVote(c);
+        return true;
+      }
+      if (action.id === s.timers.phase && s.phase === 'hunter') {
+        finishHunter(c, 'none');
         return true;
       }
       if (action.id === s.timers.phase && s.phase === 'pkSpeech') {

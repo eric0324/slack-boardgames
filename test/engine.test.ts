@@ -722,3 +722,84 @@ describe('day-phase: 平票 PK', () => {
     expect(ephemeralTo(after.events, 'p1')).toMatchObject({ text: expect.stringContaining('PK') });
   });
 });
+
+const kill = (s: GameState, ...ids: string[]): GameState => ({
+  ...s,
+  players: s.players.map((p) => (ids.includes(p.id) ? { ...p, alive: false } : p)),
+});
+
+describe('day-phase: 獵人開槍', () => {
+  it('夜晚被刀的獵人，天亮後、討論前可以開槍', () => {
+    const night = fullNight('p6', 'skip');
+    expect(night.state.phase).toBe('hunter');
+    const [p] = prompts(night.events, 'hunterShoot');
+    expect(p).toMatchObject({ audience: 'user', user: 'p6' });
+    expect(values(p)).toContain('none');
+    expect(announces(night.events).some((t) => t.includes('開始討論'))).toBe(false);
+
+    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], night.state);
+    expect(announces(shot.events)).toContainEqual(expect.stringContaining('獵人 <@p6> 開槍帶走了 <@p8>'));
+    expect(isDead(shot.state, 'p8')).toBe(true);
+    expect(shot.state.phase).toBe('discussion');
+  });
+
+  it('被放逐的獵人開槍後，判斷勝負再進入夜晚', () => {
+    const exiled = run(
+      votes([['p1', 'p6'], ['p2', 'p6'], ['p3', 'p6'], ['p4', 'abstain'], ['p5', 'abstain'], ['p6', 'abstain'], ['p8', 'abstain']]),
+      voting().state,
+    );
+    expect(exiled.state.phase).toBe('hunter');
+    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p1' }], exiled.state);
+    expect(isDead(shot.state, 'p1')).toBe(true);
+    expect(shot.state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('被毒死的獵人不能開槍', () => {
+    const { state, events } = fullNight('p7', 'poison:p6');
+    expect(prompts(events, 'hunterShoot')).toEqual([]);
+    expect(announces(events).some((t) => t.includes('獵人'))).toBe(false);
+    expect(state.phase).toBe('discussion');
+  });
+
+  it('選擇不開槍或超時：沒有人死亡，不公開獵人身分', () => {
+    const night = fullNight('p6', 'skip');
+    for (const next of [
+      run([{ type: 'hunterShoot', user: 'p6', target: 'none' }], night.state),
+      run([{ type: 'timeout', id: lastTimer(night.events).id }], night.state),
+    ]) {
+      expect(next.state.players.filter((p) => !p.alive).map((p) => p.id)).toEqual(['p6']);
+      expect(announces(next.events).some((t) => t.includes('獵人'))).toBe(false);
+      expect(next.state.phase).toBe('discussion');
+    }
+  });
+
+  it('不是獵人送出開槍會被忽略', () => {
+    const { state } = fullNight('p6', 'skip');
+    expect(run([{ type: 'hunterShoot', user: 'p7', target: 'p1' }], state).events).toEqual([]);
+  });
+});
+
+describe('win-condition: 判定時機（獵人）', () => {
+  it('獵人被放逐時勝負已定，不會得到開槍機會', () => {
+    const { state, events } = voting();
+    const godsDown = kill(state, 'p4', 'p5'); // 預言家、女巫已死，放逐獵人後神職全滅
+    const after = run([...votes([['p1', 'p6'], ['p2', 'p6'], ['p3', 'p6']]), { type: 'timeout', id: lastTimer(events).id }], godsDown);
+    expect(after.state.phase).toBe('ended');
+    expect(prompts(after.events, 'hunterShoot')).toEqual([]);
+  });
+
+  it('獵人開槍帶走最後一名狼人：好人獲勝', () => {
+    const oneWolf = kill(started(8).state, 'p2', 'p3');
+    const night = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: 'p6' },
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      oneWolf,
+    );
+    const shot = run([{ type: 'hunterShoot', user: 'p6', target: 'p1' }], night.state);
+    expect(shot.state.phase).toBe('ended');
+    expect(announces(shot.events)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
+  });
+});
