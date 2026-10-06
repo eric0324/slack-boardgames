@@ -12,6 +12,7 @@
 - 自動主持白天：公布死訊、計時討論、按鈕投票放逐、平票 PK、獵人開槍
 - 採用屠邊規則判斷勝負，遊戲結束時公開所有人的身分
 - 每個階段都有時限，超時就照預設行為處理（例如棄票、不發動技能）
+- 重要時刻（開始、天黑、天亮、放逐、獵人開槍、勝負）的頻道公告附上 GIF 和 emoji
 - 房主可以用 `/werewolf addbot`、`/werewolf removebot` 加入或移除 bot 玩家，人數不夠或一個人測試時也能開局
 
 ## Capabilities
@@ -24,6 +25,7 @@
 - `day-phase`: 公布夜晚死訊、討論計時、放逐投票、平票 PK、獵人開槍
 - `win-condition`: 屠邊勝負判定、判定時機，以及遊戲結束時公開身分
 - `bot-players`: 房主可以加入或移除 bot 玩家補足人數，bot 輪到時隨機、立刻行動
+- `announcement-gifs`: 重要時刻的頻道公告附上 Giphy GIF 和 emoji，開始公告提醒玩家查看私訊
 
 ### Modified Capabilities
 

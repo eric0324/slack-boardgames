@@ -57,3 +57,8 @@
 - [x] 10.1 Engine 支援 `addBot`、`removeBot` action（只有房主、只有房間階段、上限 12 人、從最後加入的開始移除），bot 顯示成「🤖Bot<編號>」；確認 bot-players 中「加入與移除 bot」「bot 的顯示方式」的 scenarios 測試通過
 - [x] 10.2 Engine 在每次處理完 action 後，替所有輪到行動的 bot 隨機、立刻行動（狼人不刀狼人、投票不投自己也不棄票）；確認「bot 自動行動」的 scenarios 測試通過，並補一個 6 人局中 5 個 bot 的整局測試，確認遊戲會跑到結束
 - [x] 10.3 Slack adapter 支援 `/werewolf addbot [n]`、`/werewolf removebot [n]`，不私訊 bot、不把提示送給 bot、狼人私密對話只拉真人、按鈕上的 bot 顯示名字；用假的 Slack client 確認「bot 不會收到訊息」的 scenarios 測試通過，並更新 README 的玩法說明
+
+## 11. 公告 GIF 與 emoji
+
+- [ ] 11.1 Engine 的 `announce` event 加上代表時刻的 `gif` 欄位（例如 `night`、`dawnDeath`、`dawnPeace`），公告開頭加上 emoji，開始公告提醒查看私訊；確認 announcement-gifs 中 emoji、提醒私訊，以及各時刻對應正確 `gif` 的測試通過
+- [ ] 11.2 新增 `src/gifs.ts` 設定檔，從 Giphy 挑選每個時刻的初始 GIF（使用小尺寸版本的網址），並確認每個網址都讀得到；Slack adapter 把有 `gif` 的公告送成文字加 image block，隨機選一張，沒有設定時只送文字；用假的 Slack client 確認「多張 GIF 隨機選」「沒有設定 GIF」的 scenarios 測試通過，README 說明怎麼替換 GIF
