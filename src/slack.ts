@@ -45,7 +45,7 @@ export function parseCommand(text: string, user: string, channel: string): Actio
   }
 }
 
-export function buttonAction(kind: string, value: string, user: string): Action | null {
+export function buttonAction(kind: string, value: string, user: string, channel = ''): Action | null {
   switch (kind) {
     case 'join':
     case 'leave':
@@ -63,6 +63,8 @@ export function buttonAction(kind: string, value: string, user: string): Action 
       return { type: 'hunterShoot', user, target: value };
     case 'endSpeech':
       return { type: 'endSpeech', user };
+    case 'rematch':
+      return { type: 'rematch', user, channel };
     default:
       return null;
   }
@@ -112,8 +114,9 @@ export class GameHost {
     this.names.set(user, userName);
     const kind = actionId.split(':')[1];
     const sep = value.indexOf('|');
-    const action = buttonAction(kind, value.slice(sep + 1), user);
-    return action ? this.dispatch(value.slice(0, sep), action) : Promise.resolve();
+    const channel = value.slice(0, sep);
+    const action = buttonAction(kind, value.slice(sep + 1), user, channel);
+    return action ? this.dispatch(channel, action) : Promise.resolve();
   }
 
   dispatch(channel: string, action: Action): Promise<void> {
