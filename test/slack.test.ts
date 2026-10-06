@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GIFS } from '../src/gifs.js';
 import { buttonAction, GameHost, parseCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
@@ -235,5 +236,47 @@ describe('Slack：bot 玩家', () => {
     const { calls } = await botGame();
     const wolfPrompt = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1').find((c) => buttonsOf(c).length)!;
     expect(buttonsOf(wolfPrompt).map((b: any) => b.text.text)).toContain('🤖Bot2');
+  });
+});
+
+describe('Slack：公告 GIF', () => {
+  async function nightAnnounce(gifs: Record<string, string[]>, rng: () => number) {
+    const { client, calls } = fakeClient();
+    const host = new GameHost(client, { rng, setTimer: () => {}, gifs });
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.command('C1', 'U1', 'alice', 'addbot 5');
+    await host.command('C1', 'U1', 'alice', 'start');
+    return calls.find((c) => c.method === 'chat.postMessage' && String(c.args.text).includes('天黑'))!;
+  }
+  const imageOf = (call: Call) => (call.args.blocks ?? []).find((b: any) => b.type === 'image');
+
+  it('有設定 GIF 的公告送出文字加 image block', async () => {
+    const call = await nightAnnounce({ night: ['https://x/a.gif'] }, () => 0.99999);
+    expect(call.args.text).toContain('天黑');
+    expect(imageOf(call)).toMatchObject({ type: 'image', image_url: 'https://x/a.gif' });
+  });
+
+  it('多張 GIF 隨機選', async () => {
+    const urls = ['https://x/a.gif', 'https://x/b.gif', 'https://x/c.gif'];
+    const a = imageOf(await nightAnnounce({ night: urls }, () => 0)).image_url;
+    const c = imageOf(await nightAnnounce({ night: urls }, () => 0.99999)).image_url;
+    expect(urls).toContain(a);
+    expect(urls).toContain(c);
+    expect(a).not.toBe(c);
+  });
+
+  it('沒有設定 GIF 時只送文字', async () => {
+    const call = await nightAnnounce({}, () => 0.99999);
+    expect(call.args.text).toContain('天黑');
+    expect(call.args.blocks).toBeUndefined();
+  });
+
+  it('預設設定檔每個時刻都有 Giphy GIF', () => {
+    const keys = ['start', 'night', 'dawnDeath', 'dawnPeace', 'exile', 'hunterShot', 'goodWin', 'wolvesWin'];
+    for (const k of keys) {
+      const urls = GIFS[k as keyof typeof GIFS];
+      expect(urls.length, k).toBeGreaterThan(0);
+      for (const u of urls) expect(u).toMatch(/^https:\/\/media\.giphy\.com\/media\/\w+\/200\.gif$/);
+    }
   });
 });

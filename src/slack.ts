@@ -1,5 +1,6 @@
 // Slack adapter：把 slash command 和按鈕轉成 engine action，再把 engine event 轉成 Slack API 呼叫。
-import { applyAction, isBot, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type Rng } from './engine.js';
+import { applyAction, isBot, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
+import { GIFS } from './gifs.js';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -15,6 +16,7 @@ export interface SlackClient {
 
 export interface HostOptions {
   rng?: Rng;
+  gifs?: Partial<Record<GifKey, string[]>>;
   setTimer?: (fn: () => void, ms: number) => void;
 }
 
@@ -78,6 +80,7 @@ export class GameHost {
   private wolfChats = new Map<string, { users: string; id: string }>(); // 遊戲頻道 → 狼人多人私訊
   private queue: Promise<void> = Promise.resolve();
   private rng: Rng;
+  private gifs: Partial<Record<GifKey, string[]>>;
   private setTimer: (fn: () => void, ms: number) => void;
 
   constructor(
@@ -85,6 +88,7 @@ export class GameHost {
     opts: HostOptions = {},
   ) {
     this.rng = opts.rng ?? Math.random;
+    this.gifs = opts.gifs ?? GIFS;
     this.setTimer = opts.setTimer ?? ((fn, ms) => void setTimeout(fn, ms));
   }
 
@@ -183,9 +187,20 @@ export class GameHost {
         await chat.postMessage({ channel: target, text: e.text, blocks });
         return;
       }
-      case 'announce':
-        await chat.postMessage({ channel, text: e.text });
+      case 'announce': {
+        const urls = (e.gif && this.gifs[e.gif]) || [];
+        if (!urls.length) {
+          await chat.postMessage({ channel, text: e.text });
+          return;
+        }
+        const url = urls[Math.floor(this.rng() * urls.length)];
+        const blocks = [
+          { type: 'section', text: { type: 'mrkdwn', text: e.text } },
+          { type: 'image', image_url: url, alt_text: e.gif },
+        ];
+        await chat.postMessage({ channel, text: e.text, blocks });
         return;
+      }
       case 'ephemeral':
         if (isBot(e.to)) return;
         await chat.postEphemeral({ channel, user: e.to, text: e.text });

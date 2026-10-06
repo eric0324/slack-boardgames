@@ -61,10 +61,20 @@ npm test       # 執行測試
 7. `/werewolf vote`：房主提前結束討論，直接進入投票
 8. `/werewolf cancel`：房主取消遊戲
 
+## 替換公告的 GIF
+
+開始、天黑、天亮、放逐、獵人開槍、勝負這些時刻的頻道公告會附上 Giphy 的 GIF，設定在 `src/gifs.ts`：
+
+1. 在 [giphy.com](https://giphy.com) 找到想要的 GIF，打開它的頁面
+2. 網址最後一段就是 id，例如 `giphy.com/gifs/moon-night-werewolf-g1Y5zKWbODUl2` 的 id 是 `g1Y5zKWbODUl2`
+3. 把 id 加進 `src/gifs.ts` 對應時刻的 `giphy(...)` 裡；同一個時刻有多張時會隨機選一張，清單清空就只送文字
+4. 重新啟動 bot
+
 ## 架構
 
 - `src/engine.ts`：遊戲規則，純邏輯，沒有 I/O。`applyAction(state, action, rng)` 回傳新的 state 和要送出的 events
 - `src/slack.ts`：把 Slack 指令和按鈕轉成 action，把 events 轉成 Slack API 呼叫，並管理計時器
+- `src/gifs.ts`：各時刻公告搭配的 GIF 清單
 - `src/index.ts`：啟動 Bolt app
 
 遊戲狀態只存在記憶體裡，bot 重啟後進行中的遊戲會消失。
