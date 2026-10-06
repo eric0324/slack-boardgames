@@ -1306,3 +1306,31 @@ describe('announcement-gifs: 開始公告附上規則連結', () => {
     expect(announceWith(started(8).events, '遊戲開始').text).toContain(`<${url}|遊戲規則>`);
   });
 });
+
+describe('game-lobby: 不在遊戲中的人不能參與', () => {
+  it('不在遊戲中的人投票：不計入，只有本人看到提示', () => {
+    const { state } = voting();
+    const after = run([{ type: 'dayVote', user: 'X', target: 'p1' }], state);
+    expect(after.state.votes.X).toBeUndefined();
+    expect(after.events).toEqual([{ type: 'ephemeral', to: 'X', text: '你不在這局遊戲中。' }]);
+  });
+
+  it('不在遊戲中的人按結束發言：發言者不變', () => {
+    const { state } = dawned('p7', 'skip');
+    const after = run([{ type: 'endSpeech', user: 'X' }], state);
+    expect(after.state.speaker).toBe(state.speaker);
+    expect(after.events).toEqual([{ type: 'ephemeral', to: 'X', text: '你不在這局遊戲中。' }]);
+  });
+
+  it('夜晚的按鈕也一樣', () => {
+    const night = started(8).state;
+    for (const action of [
+      { type: 'wolfVote', user: 'X', target: 'p7' },
+      { type: 'seerCheck', user: 'X', target: 'p1' },
+      { type: 'witchAct', user: 'X', choice: 'skip' },
+      { type: 'hunterShoot', user: 'X', target: 'none' },
+    ] as Action[]) {
+      expect(run([action], night).events).toEqual([{ type: 'ephemeral', to: 'X', text: '你不在這局遊戲中。' }]);
+    }
+  });
+});

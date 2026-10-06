@@ -546,9 +546,15 @@ const reply = (c: Ctx, to: string, text: string) => {
 
 type GameAction = Exclude<Action, { type: 'new' }>;
 
+// 只有這局的玩家才能做的操作（遊戲按鈕）
+const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote'];
+
 // 回傳 true 代表 state 有變動
 function handle(c: Ctx, action: GameAction): boolean {
   const s = c.s;
+  if (PLAYER_ACTIONS.includes(action.type) && 'user' in action && !s.players.some((p) => p.id === action.user)) {
+    return reply(c, action.user, '你不在這局遊戲中。');
+  }
   switch (action.type) {
     case 'join': {
       if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
