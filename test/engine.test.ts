@@ -659,12 +659,12 @@ describe('day-phase: 輪流發言', () => {
     expect(day.state.speaker).toBe('p1');
   });
 
-  it('全部講完進入 2 分鐘自由討論，時間到進入投票', () => {
+  it('全部講完進入 1 分 30 秒自由討論，時間到進入投票', () => {
     const { state } = dawned('p7', 'skip');
     const done = run(['p8', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'endSpeech', user }) as Action), state);
     expect(done.state.phase).toBe('discussion');
-    expect(announces(done.events)).toContainEqual(expect.stringContaining('開始自由討論，時間 2 分鐘'));
-    expect(lastTimer(done.events).ms).toBe(2 * 60_000);
+    expect(announces(done.events)).toContainEqual(expect.stringContaining('開始自由討論，時間 1 分 30 秒'));
+    expect(lastTimer(done.events).ms).toBe(90_000);
     expect(run([{ type: 'timeout', id: lastTimer(done.events).id }], done.state).state.phase).toBe('vote');
   });
 

@@ -49,7 +49,7 @@ export const ACTION_MS = 60_000;
 const WOLF_REMIND_BEFORE_MS = 30_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間
 export const LAST_WORDS_MS = 30_000;
-export const DISCUSSION_MS = 2 * 60_000; // 輪流發言後的自由討論
+export const DISCUSSION_MS = 90_000; // 輪流發言後的自由討論
 
 export interface Player {
   id: string;
@@ -555,7 +555,7 @@ function nextSpeaker(c: Ctx) {
     return;
   }
   s.phase = 'discussion';
-  c.events.push({ type: 'announce', text: `💬 開始自由討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
+  c.events.push({ type: 'announce', text: `💬 開始自由討論，時間 ${duration(DISCUSSION_MS)}。` });
   startTimer(c, 'phase', DISCUSSION_MS);
 }
 
@@ -644,6 +644,14 @@ function checkGameOver(c: Ctx): boolean {
     },
   );
   return true;
+}
+
+// 90_000 → 「1 分 30 秒」、120_000 → 「2 分鐘」、40_000 → 「40 秒」
+function duration(ms: number) {
+  const min = Math.floor(ms / 60_000);
+  const sec = (ms % 60_000) / 1000;
+  if (!min) return `${sec} 秒`;
+  return sec ? `${min} 分 ${sec} 秒` : `${min} 分鐘`;
 }
 
 const isSpeaking = (s: GameState) => s.phase === 'speech' || s.phase === 'pkSpeech' || s.phase === 'lastWords';
