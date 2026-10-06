@@ -188,11 +188,14 @@ const GODS: Role[] = ['seer', 'witch', 'hunter', 'knight'];
 // 狼人陣營：狼王在擊殺、查驗、勝負判定時都算狼人
 export const isWolf = (role?: Role) => role === 'werewolf' || role === 'wolfKing';
 
-// 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅或神職全滅 → 狼人贏
+// 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅、神職全滅，或存活狼人 ≥ 存活好人 → 狼人贏
 export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
   const allDead = (match: (r: Role) => boolean) => players.filter((p) => match(p.role!)).every((p) => !p.alive);
   if (allDead(isWolf)) return 'good';
   if (allDead((r) => r === 'villager') || allDead((r) => GODS.includes(r))) return 'wolves';
+  // 存活狼人追上好人：好人已經不可能靠投票贏
+  const wolves = players.filter((p) => p.alive && isWolf(p.role)).length;
+  if (wolves >= players.filter((p) => p.alive && !isWolf(p.role)).length) return 'wolves';
   return null;
 }
 
