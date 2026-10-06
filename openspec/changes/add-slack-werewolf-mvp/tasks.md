@@ -128,4 +128,4 @@
 
 ## 25. 開始遊戲按鈕
 
-- [ ] 25.1 Slack adapter 在房間公告加上「開始遊戲」按鈕，轉成 `start` action；用假的 Slack client 確認房主按下會開始遊戲、非房主和人數不足時只有按的人看到提示，並更新 wiki 指令頁
+- [x] 25.1 Slack adapter 在房間公告加上「開始遊戲」按鈕，轉成 `start` action；用假的 Slack client 確認房主按下會開始遊戲、非房主和人數不足時只有按的人看到提示，並更新 wiki 指令頁
