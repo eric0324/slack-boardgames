@@ -93,3 +93,9 @@
 
 - [x] 18.1 Engine：遊戲分出勝負後送出「再來一局」按鈕，加入 `rematch` action（只有上一局的真人玩家、開空房間、已有房間時拒絕、取消的遊戲不能用）；確認 win-condition「再來一局」的 scenarios 測試通過
 - [x] 18.2 Slack adapter 把「再來一局」按鈕轉成 `rematch` action，並更新 wiki 的指令頁；用假的 Slack client 確認按鈕會開出新的房間公告
+
+## 19. 騎士
+
+- [ ] 19.1 Engine：角色配置表加入騎士（9 人以上取代一位村民），騎士算神職，身分私訊有能力說明；確認 role-assignment「12 人局的配置」「9 人以上才有騎士」和 win-condition 相關測試通過
+- [ ] 19.2 Engine：騎士決鬥（輪流發言時私訊決鬥按鈕、只能在輪流發言或自由討論時發動、一局一次、決鬥到狼人直接入夜、決鬥到好人騎士出局並調整發言順序、決鬥後判斷勝負、bot 不決鬥）；確認 day-phase「騎士決鬥」的 scenarios 測試通過
+- [ ] 19.3 Slack adapter 把決鬥按鈕轉成 action，更新 wiki 的遊戲規則和指令頁；用假的 Slack client 確認按鈕轉換正確
