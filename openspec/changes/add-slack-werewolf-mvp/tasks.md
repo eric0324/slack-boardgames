@@ -88,3 +88,8 @@
 ## 17. 不在遊戲中的人
 
 - [x] 17.1 不在玩家名單上的人按遊戲按鈕時忽略並回覆「你不在這局遊戲中」；確認 game-lobby「不在遊戲中的人不能參與」的 scenarios 測試通過
+
+## 18. 再來一局
+
+- [ ] 18.1 Engine：遊戲分出勝負後送出「再來一局」按鈕，加入 `rematch` action（只有上一局的真人玩家、開空房間、已有房間時拒絕、取消的遊戲不能用）；確認 win-condition「再來一局」的 scenarios 測試通過
+- [ ] 18.2 Slack adapter 把「再來一局」按鈕轉成 `rematch` action，並更新 wiki 的指令頁；用假的 Slack client 確認按鈕會開出新的房間公告
