@@ -5,32 +5,36 @@ export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
 export type Phase = 'lobby' | 'night' | 'lastWords' | 'hunter' | 'speech' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
-export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
+export type Role = 'werewolf' | 'wolfKing' | 'seer' | 'witch' | 'hunter' | 'knight' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
 export const ROLE_TABLE: Record<number, Partial<Record<Role, number>>> = {
   6: { werewolf: 2, seer: 1, witch: 1, villager: 2 },
   7: { werewolf: 2, seer: 1, witch: 1, hunter: 1, villager: 2 },
   8: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 2 },
-  9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 3 },
-  10: { werewolf: 3, seer: 1, witch: 1, hunter: 1, villager: 4 },
-  11: { werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 4 },
-  12: { werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 5 },
+  9: { werewolf: 3, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 2 },
+  10: { werewolf: 2, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  11: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 3 },
+  12: { werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4 },
 };
 
 export const ROLE_NAME: Record<Role, string> = {
   werewolf: '狼人',
+  wolfKing: '狼王',
   seer: '預言家',
   witch: '女巫',
   hunter: '獵人',
+  knight: '騎士',
   villager: '村民',
 };
 
 const ROLE_HELP: Record<Role, string> = {
   werewolf: '每晚和其他狼人一起選一位玩家擊殺。殺光所有村民或所有神職就獲勝。',
+  wolfKing: '你是狼人陣營，每晚和其他狼人一起擊殺。死亡時（被毒死除外）可以開槍帶走一位玩家。',
   seer: '每晚可以查驗一位玩家是好人還是狼人。',
   witch: '有一瓶解藥和一瓶毒藥，各能用一次，一晚最多用一瓶。解藥只有第一夜可以救自己。',
   hunter: '被狼人殺死或被放逐時，可以開槍帶走一位玩家；被毒死則不能開槍。',
+  knight: '整局一次，白天輪流發言或自由討論時可以翻牌向一位玩家決鬥：對方是狼人就出局並直接入夜，對方是好人則你出局。',
   villager: '沒有特殊能力，靠白天的推理和投票找出狼人。',
 };
 
@@ -74,6 +78,7 @@ export interface GameState {
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
   winner?: 'good' | 'wolves'; // 分出勝負後才有；取消的遊戲沒有
+  knightUsed: boolean; // 騎士是否已經決鬥過
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -81,7 +86,7 @@ export interface GameState {
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
-  hunter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人
+  shooter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人或狼王
 }
 
 export type Action =
@@ -101,6 +106,7 @@ export type Action =
   | { type: 'skipSpeaker'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
+  | { type: 'duel'; user: string; target: string }
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -150,12 +156,14 @@ export function dealRoles(n: number, rng: Rng): Role[] {
   );
 }
 
-const GODS: Role[] = ['seer', 'witch', 'hunter'];
+const GODS: Role[] = ['seer', 'witch', 'hunter', 'knight'];
+// 狼人陣營：狼王在擊殺、查驗、勝負判定時都算狼人
+export const isWolf = (role?: Role) => role === 'werewolf' || role === 'wolfKing';
 
 // 屠邊：狼人全滅 → 好人贏（同時成立也算好人）；村民全滅或神職全滅 → 狼人贏
 export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
   const allDead = (match: (r: Role) => boolean) => players.filter((p) => match(p.role!)).every((p) => !p.alive);
-  if (allDead((r) => r === 'werewolf')) return 'good';
+  if (allDead(isWolf)) return 'good';
   if (allDead((r) => r === 'villager') || allDead((r) => GODS.includes(r))) return 'wolves';
   return null;
 }
@@ -164,7 +172,8 @@ const player = (s: GameState, id: string) => s.players.find((p) => p.id === id)!
 const alive = (s: GameState) => s.players.filter((p) => p.alive);
 const aliveWith = (s: GameState, role: Role) => alive(s).filter((p) => p.role === role);
 const isAlive = (s: GameState, id: string) => alive(s).some((p) => p.id === id);
-const wolfIds = (s: GameState) => s.players.filter((p) => p.role === 'werewolf').map((p) => p.id);
+const wolfIds = (s: GameState) => s.players.filter((p) => isWolf(p.role)).map((p) => p.id);
+const aliveWolves = (s: GameState) => alive(s).filter((p) => isWolf(p.role));
 const options = (ids: string[]): Option[] => ids.map((id) => ({ value: id, label: id }));
 
 const lobbyEvent = (s: GameState): GameEvent => ({
@@ -205,7 +214,11 @@ function announceStart(c: Ctx) {
       to: p.id,
       text: `你的身分是「${ROLE_NAME[p.role!]}」。${ROLE_HELP[p.role!]}`,
     })),
-    { type: 'wolfChat', wolves, text: `這裡是狼人的私密對話。狼人：${wolves.map(mention).join(' ')}` },
+    {
+      type: 'wolfChat',
+      wolves,
+      text: `這裡是狼人的私密對話。狼人：${wolves.map((id) => mention(id) + (player(s, id).role === 'wolfKing' ? '（狼王）' : '')).join(' ')}`,
+    },
   );
 }
 
@@ -292,8 +305,8 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
   const n = s.night;
   if (s.phase === 'night' && n) {
     if (n.wolfTarget === undefined) {
-      const wolf = aliveWith(s, 'werewolf').find((p) => isBot(p.id) && !n.wolfVotes[p.id]);
-      const prey = alive(s).filter((p) => p.role !== 'werewolf').map((p) => p.id);
+      const wolf = aliveWolves(s).find((p) => isBot(p.id) && !n.wolfVotes[p.id]);
+      const prey = alive(s).filter((p) => !isWolf(p.role)).map((p) => p.id);
       if (wolf) return { type: 'wolfVote', user: wolf.id, target: pick(prey, rng) };
     }
     const seer = aliveBot(s, 'seer');
@@ -313,9 +326,9 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
       return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
     }
   }
-  if (s.phase === 'hunter' && s.hunter && isBot(s.hunter.id)) {
+  if (s.phase === 'hunter' && s.shooter && isBot(s.shooter.id)) {
     const targets = [...alive(s).map((p) => p.id), 'none'];
-    return { type: 'hunterShoot', user: s.hunter.id, target: pick(targets, rng) };
+    return { type: 'hunterShoot', user: s.shooter.id, target: pick(targets, rng) };
   }
   return null;
 }
@@ -383,22 +396,31 @@ function nextLastWords(c: Ctx) {
   const after = s.afterLastWords!;
   s.afterLastWords = undefined;
   if (after.kind === 'exile') {
-    if (player(s, after.id).role === 'hunter') startHunter(c, after.id, 'night');
+    if (canShoot(s, after.id, 'exile')) startShooter(c, after.id, 'night');
     else enterNight(c);
     return;
   }
   const n = s.night!;
   const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
-  const hunter = c.s.players.find((p) => p.id === shotByWolves && p.role === 'hunter');
-  if (hunter) startHunter(c, hunter.id, 'speech');
+  if (shotByWolves && canShoot(s, shotByWolves, 'wolf')) startShooter(c, shotByWolves, 'speech');
   else startSpeeches(c);
 }
 
-function startHunter(c: Ctx, id: string, next: 'speech' | 'night') {
+type DeathCause = 'wolf' | 'poison' | 'exile' | 'shot' | 'duel';
+
+// 獵人：被狼人刀死或被放逐才能開槍；狼王：除了被毒死都可以
+function canShoot(s: GameState, id: string, cause: DeathCause): boolean {
+  const role = player(s, id).role;
+  if (role === 'hunter') return cause === 'wolf' || cause === 'exile';
+  if (role === 'wolfKing') return cause !== 'poison';
+  return false;
+}
+
+function startShooter(c: Ctx, id: string, next: 'speech' | 'night') {
   const s = c.s;
   s.phase = 'hunter';
   s.timers = {};
-  s.hunter = { id, next };
+  s.shooter = { id, next };
   c.events.push({
     type: 'prompt',
     kind: 'hunterShoot',
@@ -410,14 +432,20 @@ function startHunter(c: Ctx, id: string, next: 'speech' | 'night') {
   startTimer(c, 'phase', ACTION_MS);
 }
 
-function finishHunter(c: Ctx, target: string) {
+function finishShooter(c: Ctx, target: string) {
   const s = c.s;
-  const { id, next } = s.hunter!;
-  s.hunter = undefined;
+  const { id, next } = s.shooter!;
+  s.shooter = undefined;
   if (target !== 'none') {
     player(s, target).alive = false;
-    c.events.push({ type: 'announce', text: `🔫 獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
+    const who = ROLE_NAME[player(s, id).role!];
+    c.events.push({ type: 'announce', text: `🔫 ${who} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
     if (checkGameOver(c)) return;
+    // 被帶走的人如果是狼王，輪到他開槍（連鎖）
+    if (canShoot(s, target, 'shot')) {
+      startShooter(c, target, next);
+      return;
+    }
   }
   if (next === 'speech') startSpeeches(c);
   else enterNight(c);
@@ -431,7 +459,42 @@ function startSpeeches(c: Ctx) {
   s.phase = 'speech';
   s.speakers = [...living.slice(first), ...living.slice(0, first)];
   c.events.push({ type: 'announce', text: `💬 開始輪流發言，順序：${s.speakers.map(mention).join(' → ')}` });
+  promptKnight(c);
   nextSpeaker(c);
+}
+
+// 騎士還活著、還沒決鬥過時，私訊決鬥按鈕
+function promptKnight(c: Ctx) {
+  const s = c.s;
+  const knight = aliveWith(s, 'knight')[0];
+  if (!knight || s.knightUsed) return;
+  c.events.push({
+    type: 'prompt',
+    kind: 'duel',
+    audience: 'user',
+    user: knight.id,
+    text: '🗡️ 你可以在輪流發言或自由討論時翻牌決鬥（整局一次）。選擇決鬥對象：',
+    options: options(alive(s).filter((p) => p.id !== knight.id).map((p) => p.id)),
+  });
+}
+
+function duel(c: Ctx, knight: string, target: string) {
+  const s = c.s;
+  s.knightUsed = true;
+  c.events.push({ type: 'announce', text: `🗡️ 騎士 ${mention(knight)} 翻牌，向 ${mention(target)} 發起決鬥！` });
+  if (isWolf(player(s, target).role)) {
+    player(s, target).alive = false;
+    c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。` });
+    if (checkGameOver(c)) return;
+    if (canShoot(s, target, 'duel')) startShooter(c, target, 'night');
+    else enterNight(c);
+    return;
+  }
+  player(s, knight).alive = false;
+  c.events.push({ type: 'announce', text: `${mention(target)} 是好人，騎士 ${mention(knight)} 出局。` });
+  if (checkGameOver(c)) return;
+  s.speakers = s.speakers.filter((id) => id !== knight);
+  if (s.phase === 'speech' && s.speaker === knight) nextSpeaker(c);
 }
 
 // 換下一位發言者；bot 直接過，沒有人了就進入下一個階段
@@ -559,7 +622,7 @@ const reply = (c: Ctx, to: string, text: string) => {
 type GameAction = Exclude<Action, { type: 'new' } | { type: 'rematch' }>;
 
 // 只有這局的玩家才能做的操作（遊戲按鈕）
-const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote'];
+const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote', 'duel'];
 
 // 回傳 true 代表 state 有變動
 function handle(c: Ctx, action: GameAction): boolean {
@@ -630,7 +693,7 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'wolfVote': {
       const n = s.night;
       if (s.phase !== 'night' || !n || n.wolfTarget !== undefined) return false;
-      if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user)) return false;
+      if (!aliveWolves(s).some((p) => p.id === action.user)) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       n.wolfVotes[action.user] = action.target;
       const picked =
@@ -638,7 +701,7 @@ function handle(c: Ctx, action: GameAction): boolean {
           ? `${mention(action.user)} 選擇不殺人。`
           : `${mention(action.user)} 選擇擊殺 ${mention(action.target)}。`;
       c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text: picked });
-      if (aliveWith(s, 'werewolf').every((w) => n.wolfVotes[w.id])) decideWolves(c);
+      if (aliveWolves(s).every((w) => n.wolfVotes[w.id])) decideWolves(c);
       return true;
     }
     case 'seerCheck': {
@@ -648,7 +711,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (action.target === action.user || !isAlive(s, action.target)) return false;
       n.seerDone = true;
       const target = player(s, action.target);
-      const side = target.role === 'werewolf' ? '狼人' : '好人';
+      const side = isWolf(target.role) ? '狼人' : '好人';
       c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
     }
@@ -681,6 +744,13 @@ function handle(c: Ctx, action: GameAction): boolean {
       startVote(c);
       return true;
     }
+    case 'duel': {
+      if (!aliveWith(s, 'knight').some((p) => p.id === action.user) || s.knightUsed) return false;
+      if (s.phase !== 'speech' && s.phase !== 'discussion') return reply(c, action.user, '現在不能決鬥。');
+      if (action.target === action.user || !isAlive(s, action.target)) return false;
+      duel(c, action.user, action.target);
+      return true;
+    }
     case 'endSpeech': {
       if (!isSpeaking(s)) return false;
       if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
@@ -707,10 +777,10 @@ function handle(c: Ctx, action: GameAction): boolean {
       return true;
     }
     case 'hunterShoot': {
-      if (s.phase !== 'hunter' || action.user !== s.hunter?.id) return false;
+      if (s.phase !== 'hunter' || action.user !== s.shooter?.id) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       if (action.target === 'none') c.events.push({ type: 'dm', to: action.user, text: '你選擇不開槍。' });
-      finishHunter(c, action.target);
+      finishShooter(c, action.target);
       return true;
     }
     case 'timeout': {
@@ -723,7 +793,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       }
       if (action.id === s.timers.wolfRemind && n) {
         delete s.timers.wolfRemind;
-        const waiting = aliveWith(s, 'werewolf').filter((w) => !n.wolfVotes[w.id]);
+        const waiting = aliveWolves(s).filter((w) => !n.wolfVotes[w.id]);
         if (n.wolfTarget === undefined && waiting.length) {
           const text = `⏰ 剩下 ${WOLF_REMIND_BEFORE_MS / 1000} 秒，還沒選的：${waiting.map((w) => mention(w.id)).join('、')}`;
           c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text });
@@ -748,7 +818,7 @@ function handle(c: Ctx, action: GameAction): boolean {
         return true;
       }
       if (action.id === s.timers.phase && s.phase === 'hunter') {
-        finishHunter(c, 'none');
+        finishShooter(c, 'none');
         return true;
       }
       return false;
@@ -794,6 +864,7 @@ function createLobby(prev: GameState | undefined, host: string, channel: string)
     lastDeaths: [],
     speakers: [],
     lastWords: [],
+    knightUsed: false,
     votes: {},
     candidates: [],
     voters: [],

@@ -139,8 +139,21 @@ describe('role-assignment: 依人數配置角色', () => {
     expect(count(dealRoles(6, Math.random))).toEqual({ werewolf: 2, seer: 1, witch: 1, villager: 2 });
   });
 
-  it('12 人局：4 狼、1 預言家、1 女巫、1 獵人、5 村民', () => {
-    expect(count(dealRoles(12, Math.random))).toEqual({ werewolf: 4, seer: 1, witch: 1, hunter: 1, villager: 5 });
+  it('12 人局：3 狼、1 狼王、1 預言家、1 女巫、1 獵人、1 騎士、4 村民', () => {
+    expect(count(dealRoles(12, Math.random))).toEqual({
+      werewolf: 3, wolfKing: 1, seer: 1, witch: 1, hunter: 1, knight: 1, villager: 4,
+    });
+  });
+
+  it('10 人以上才有狼王，取代一位普通狼人', () => {
+    expect(count(dealRoles(9, Math.random)).wolfKing).toBeUndefined();
+    expect(count(dealRoles(10, Math.random))).toMatchObject({ werewolf: 2, wolfKing: 1 });
+    expect(count(dealRoles(11, Math.random))).toMatchObject({ werewolf: 3, wolfKing: 1 });
+  });
+
+  it('9 人以上才有騎士', () => {
+    expect(count(dealRoles(8, Math.random)).knight).toBeUndefined();
+    for (let n = 9; n <= 12; n++) expect(count(dealRoles(n, Math.random)).knight).toBe(1);
   });
 
   it('6～12 人的角色總數都等於玩家數', () => {
@@ -459,7 +472,7 @@ describe('night-phase: 夜晚結算', () => {
 });
 
 // 用角色字串快速建立玩家，大寫開頭代表還活著，例如 'W' 活著的狼人、'w' 死掉的狼人
-const ROLE_CODE: Record<string, Role> = { w: 'werewolf', v: 'villager', s: 'seer', i: 'witch', h: 'hunter' };
+const ROLE_CODE: Record<string, Role> = { w: 'werewolf', g: 'wolfKing', v: 'villager', s: 'seer', i: 'witch', h: 'hunter', k: 'knight' };
 const table = (codes: string) =>
   [...codes].map((ch, i) => ({ id: `p${i + 1}`, role: ROLE_CODE[ch.toLowerCase()], alive: ch !== ch.toLowerCase() }));
 
@@ -474,6 +487,11 @@ describe('win-condition: 屠邊勝負規則', () => {
 
   it('神職全滅：狼人獲勝，即使村民還活著', () => {
     expect(checkWinner(table('WwsihVV'))).toBe('wolves');
+  });
+
+  it('騎士算神職：騎士還活著時，其他神職死光也不算狼人獲勝', () => {
+    expect(checkWinner(table('WwsihKVV'))).toBeNull();
+    expect(checkWinner(table('WwsihkVV'))).toBe('wolves');
   });
 
   it('6 人局沒有獵人：預言家和女巫都死了，狼人獲勝', () => {
@@ -1070,6 +1088,20 @@ describe('bot-players: 整局測試', () => {
   // 簡單的 LCG，讓每個種子的結果都固定
   const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
 
+  it('1 位真人 + 11 個 bot（有騎士、狼王），遊戲一定會跑到結束', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = seeded(seed);
+      let s = applyAction(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyAction(s, { type: 'addBot', user: 'p1', count: 11 }, r).state;
+      s = applyAction(s, { type: 'start', user: 'p1' }, r).state;
+      for (let step = 0; step < 500 && s.phase !== 'ended'; step++) {
+        const id = Object.values(s.timers)[0];
+        s = applyAction(s, { type: 'timeout', id: id! }, r).state;
+      }
+      expect(s.phase, `seed ${seed}`).toBe('ended');
+    }
+  });
+
   it('1 位真人 + 5 個 bot，真人什麼都不做，遊戲一定會跑到結束', () => {
     for (let seed = 1; seed <= 20; seed++) {
       const r = seeded(seed);
@@ -1367,5 +1399,190 @@ describe('win-condition: 再來一局', () => {
     const { state, events } = run([{ type: 'cancel', user: 'p1' }], started(6).state);
     expect(prompts(events, 'rematch')).toEqual([]);
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], state).events).toEqual([]);
+  });
+});
+
+// 9 人局：p1~p3 狼人、p4 預言家、p5 女巫、p6 獵人、p7 騎士、p8、p9 村民
+// 第一夜 p8 死亡，遺言跳過後進入輪流發言，順序 p9 → p1 → … → p7
+const day9 = () =>
+  skipLastWords(
+    run(
+      [
+        ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p8' }) as Action),
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      started(9).state,
+    ),
+  );
+const order9 = ['p9', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+
+describe('day-phase: 騎士決鬥', () => {
+  it('輪流發言開始時，騎士收到決鬥按鈕', () => {
+    const { state, events } = day9();
+    expect(state.phase).toBe('speech');
+    const [p] = prompts(events, 'duel');
+    expect(p).toMatchObject({ audience: 'user', user: 'p7' });
+    expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p9']);
+  });
+
+  it('自由討論時決鬥到狼人：狼人出局、沒有遺言，直接進入夜晚', () => {
+    const free = run(order9.map((user) => ({ type: 'endSpeech', user }) as Action), day9().state).state;
+    expect(free.phase).toBe('discussion');
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], free);
+    expect(announces(events)).toContainEqual(expect.stringContaining('🗡️ 騎士 <@p7> 翻牌，向 <@p1> 發起決鬥！'));
+    expect(isDead(state, 'p1')).toBe(true);
+    expect(prompts(events, 'endSpeech')).toEqual([]);
+    expect(state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('輪流發言時決鬥到好人：騎士出局，發言照常，順序中不再有騎士', () => {
+    const day = day9().state;
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p4' }], day);
+    expect(announces(events)).toContainEqual(expect.stringContaining('好人'));
+    expect(isDead(state, 'p7')).toBe(true);
+    expect(isDead(state, 'p4')).toBe(false);
+    expect(state).toMatchObject({ phase: 'speech', speaker: 'p9' });
+    expect(state.speakers).not.toContain('p7');
+  });
+
+  it('騎士正在發言時決鬥失敗：立刻換下一位', () => {
+    let s = day9().state;
+    while (s.speaker !== 'p7') s = run([{ type: 'skipSpeaker', user: 'p1' }], s).state;
+    const after = run([{ type: 'duel', user: 'p7', target: 'p4' }], s).state;
+    expect(isDead(after, 'p7')).toBe(true);
+    expect(after.speaker).not.toBe('p7');
+    expect(after.phase).toBe('discussion');
+  });
+
+  it('只能決鬥一次：之後不會再收到按鈕，再按也沒有作用', () => {
+    const night2 = run([{ type: 'duel', user: 'p7', target: 'p1' }], day9().state).state;
+    const day2 = run(
+      [
+        { type: 'seerCheck', user: 'p4', target: 'p2' },
+        { type: 'wolfVote', user: 'p2', target: 'p4' },
+        { type: 'wolfVote', user: 'p3', target: 'p4' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      night2,
+    );
+    expect(day2.state.phase).toBe('speech');
+    expect(prompts(day2.events, 'duel')).toEqual([]);
+    expect(run([{ type: 'duel', user: 'p7', target: 'p2' }], day2.state).events).toEqual([]);
+  });
+
+  it('投票時不能決鬥', () => {
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], day9().state).state;
+    const after = run([{ type: 'duel', user: 'p7', target: 'p1' }], vote);
+    expect(isDead(after.state, 'p1')).toBe(false);
+    expect(ephemeralTo(after.events, 'p7')).toMatchObject({ text: '現在不能決鬥。' });
+  });
+
+  it('決鬥到最後一名狼人：好人獲勝', () => {
+    const lastWolf = kill(day9().state, 'p2', 'p3');
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], lastWolf);
+    expect(state.phase).toBe('ended');
+    expect(announces(events)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
+  });
+
+  it('bot 騎士不會決鬥', () => {
+    const { state } = run([{ type: 'addBot', user: 'p1', count: 8 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+    expect(day.state.phase).toBe('speech');
+    expect(announces(day.events).some((t) => t.includes('翻牌'))).toBe(false);
+  });
+});
+
+// 10 人局：p1、p2 狼人，p3 狼王，p4 預言家，p5 女巫，p6 獵人，p7 騎士，p8~p10 村民
+describe('role-assignment: 狼王', () => {
+  it('狼人對話列出狼王並標出來', () => {
+    const chat = started(10).events.find((e) => e.type === 'wolfChat') as { wolves: string[]; text: string };
+    expect(chat.wolves).toEqual(['p1', 'p2', 'p3']);
+    expect(chat.text).toContain('<@p3>（狼王）');
+  });
+
+  it('狼王和其他狼人一起擊殺', () => {
+    const { state } = run(['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p8' }) as Action), started(10).state);
+    expect(state.night!.wolfTarget).toBe('p8');
+  });
+
+  it('預言家查驗狼王的結果是狼人', () => {
+    const { events } = run([{ type: 'seerCheck', user: 'p4', target: 'p3' }], started(10).state);
+    expect(events).toContainEqual({ type: 'dm', to: 'p4', text: '<@p3> 是狼人。' });
+  });
+
+  it('勝負判定時狼王算狼人', () => {
+    expect(checkWinner(table('wwGSIHKVV'))).toBeNull();
+    expect(checkWinner(table('wwgSIHKVV'))).toBe('good');
+  });
+});
+
+// 10 人局第一夜：狼人刀 kill、預言家查 p1、女巫 witch，遺言跳過
+const night10 = (kill: string, witch: string) =>
+  run(
+    [
+      ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: kill }) as Action),
+      { type: 'seerCheck', user: 'p4', target: 'p1' },
+      { type: 'witchAct', user: 'p5', choice: witch },
+    ],
+    started(10).state,
+  );
+// 第一夜 p8 死亡後進入白天，房主直接進入投票，p3（狼王）被放逐並講完遺言
+const kingExiled = () => {
+  const vote = run([{ type: 'endDiscussion', user: 'p1' }], skipLastWords(night10('p8', 'skip')).state).state;
+  const exiled = run(
+    votes([['p4', 'p3'], ['p5', 'p3'], ['p6', 'p3'], ['p7', 'p3'], ['p9', 'p3'], ['p1', 'abstain'], ['p2', 'abstain'], ['p3', 'abstain'], ['p10', 'abstain']]),
+    vote,
+  ).state;
+  return run([{ type: 'endSpeech', user: 'p3' }], exiled);
+};
+
+describe('day-phase: 狼王開槍', () => {
+  it('狼王被放逐，講完遺言後開槍，判斷勝負後進入夜晚', () => {
+    const { state, events } = kingExiled();
+    expect(prompts(events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const shot = run([{ type: 'hunterShoot', user: 'p3', target: 'p9' }], state);
+    expect(announces(shot.events)).toContainEqual(expect.stringContaining('🔫 狼王 <@p3> 開槍帶走了 <@p9>'));
+    expect(isDead(shot.state, 'p9')).toBe(true);
+    expect(shot.state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('被毒死的狼王不能開槍', () => {
+    const { state, events } = skipLastWords(night10('p8', 'poison:p3'));
+    expect(isDead(state, 'p3')).toBe(true);
+    expect(prompts(events, 'hunterShoot')).toEqual([]);
+    expect(state.phase).toBe('speech');
+  });
+
+  it('被狼人刀死的狼王可以開槍', () => {
+    const { events } = skipLastWords(night10('p3', 'skip'));
+    expect(prompts(events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+  });
+
+  it('獵人帶走狼王，狼王再開槍', () => {
+    const hunter = skipLastWords(night10('p6', 'skip'));
+    expect(prompts(hunter.events, 'hunterShoot')[0]).toMatchObject({ user: 'p6' });
+    const king = run([{ type: 'hunterShoot', user: 'p6', target: 'p3' }], hunter.state);
+    expect(prompts(king.events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const done = run([{ type: 'hunterShoot', user: 'p3', target: 'p9' }], king.state);
+    expect(isDead(done.state, 'p9')).toBe(true);
+    expect(done.state.phase).toBe('speech');
+  });
+
+  it('狼王開槍帶走獵人，獵人不能開槍', () => {
+    const shot = run([{ type: 'hunterShoot', user: 'p3', target: 'p6' }], kingExiled().state);
+    expect(isDead(shot.state, 'p6')).toBe(true);
+    expect(prompts(shot.events, 'hunterShoot')).toEqual([]);
+    expect(shot.state.phase).toBe('night');
+  });
+
+  it('騎士決鬥到狼王：狼王沒有遺言，開槍處理完後直接進入夜晚', () => {
+    const day = skipLastWords(night10('p8', 'skip')).state;
+    const dueled = run([{ type: 'duel', user: 'p7', target: 'p3' }], day);
+    expect(isDead(dueled.state, 'p3')).toBe(true);
+    expect(prompts(dueled.events, 'endSpeech').some((p) => p.text.includes('遺言'))).toBe(false);
+    expect(prompts(dueled.events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const done = run([{ type: 'hunterShoot', user: 'p3', target: 'none' }], dueled.state);
+    expect(done.state).toMatchObject({ phase: 'night', day: 2 });
   });
 });

@@ -65,6 +65,8 @@ export function buttonAction(kind: string, value: string, user: string, channel 
       return { type: 'endSpeech', user };
     case 'rematch':
       return { type: 'rematch', user, channel };
+    case 'duel':
+      return { type: 'duel', user, target: value };
     default:
       return null;
   }
