@@ -210,7 +210,7 @@ const wolfChatText = (events: GameEvent[]) =>
 describe('night-phase: 夜晚流程與時限', () => {
   it('天黑公告，狼人和預言家收到行動提示，計時 60 秒', () => {
     const { events } = started(8);
-    expect(events).toContainEqual({ type: 'announce', text: expect.stringContaining('第 1 夜') });
+    expect(events).toContainEqual({ type: 'announce', text: expect.stringContaining('第 1 夜'), gif: 'night' });
     const [wolf] = prompts(events, 'wolfKill');
     expect(wolf.audience).toBe('wolves');
     expect(wolf.options).toHaveLength(8);
@@ -1004,5 +1004,67 @@ describe('bot-players: 整局測試', () => {
       }
       expect(s.phase, `seed ${seed}`).toBe('ended');
     }
+  });
+});
+
+type Announce = Extract<GameEvent, { type: 'announce' }>;
+const announceWith = (events: GameEvent[], match: string) =>
+  events.find((e): e is Announce => e.type === 'announce' && e.text.includes(match))!;
+
+describe('announcement-gifs: 重要時刻的 GIF 和 emoji', () => {
+  it('遊戲開始：🎲、start GIF，提醒查看私訊', () => {
+    const a = announceWith(started(8).events, '遊戲開始');
+    expect(a.text.startsWith('🎲')).toBe(true);
+    expect(a.text).toContain('私訊');
+    expect(a.gif).toBe('start');
+  });
+
+  it('天黑：🌙、night GIF', () => {
+    const a = announceWith(started(8).events, '天黑');
+    expect(a).toMatchObject({ text: expect.stringMatching(/^🌙/), gif: 'night' });
+  });
+
+  it('天亮有人死亡和平安夜用不同的 GIF', () => {
+    expect(announceWith(fullNight('p7', 'skip').events, '天亮')).toMatchObject({ text: expect.stringMatching(/^☀️/), gif: 'dawnDeath' });
+    expect(announceWith(fullNight('p7', 'save').events, '天亮')).toMatchObject({ text: expect.stringMatching(/^☀️/), gif: 'dawnPeace' });
+  });
+
+  it('討論 💬、投票 🗳️、平票 PK ⚔️', () => {
+    expect(announceWith(fullNight('p7', 'skip').events, '開始討論').text.startsWith('💬')).toBe(true);
+    expect(announceWith(tied().events, '投票結果').text.startsWith('🗳️')).toBe(true);
+    expect(announceWith(tied().events, 'PK').text.startsWith('⚔️')).toBe(true);
+  });
+
+  it('放逐：🚪、exile GIF', () => {
+    const { events } = run(
+      votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p5', 'p1'], ['p6', 'p1'], ['p4', 'abstain'], ['p8', 'abstain']]),
+      voting().state,
+    );
+    expect(announceWith(events, '被放逐')).toMatchObject({ text: expect.stringMatching(/^🚪/), gif: 'exile' });
+  });
+
+  it('獵人開槍：🔫、hunterShot GIF', () => {
+    const { events } = run([{ type: 'hunterShoot', user: 'p6', target: 'p8' }], fullNight('p6', 'skip').state);
+    expect(announceWith(events, '開槍')).toMatchObject({ text: expect.stringMatching(/^🔫/), gif: 'hunterShot' });
+  });
+
+  it('勝負：好人 🎉 goodWin、狼人 🐺 wolvesWin', () => {
+    expect(announceWith(wolvesWinTonight().events, '遊戲結束')).toMatchObject({ text: expect.stringMatching(/^🐺/), gif: 'wolvesWin' });
+    const oneWolf = kill(started(8).state, 'p2', 'p3');
+    const night = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: 'p6' },
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+        { type: 'hunterShoot', user: 'p6', target: 'p1' },
+      ],
+      oneWolf,
+    );
+    expect(announceWith(night.events, '遊戲結束')).toMatchObject({ text: expect.stringMatching(/^🎉/), gif: 'goodWin' });
+  });
+
+  it('取消遊戲：🛑', () => {
+    const { events } = run([{ type: 'cancel', user: 'p1' }], started(6).state);
+    expect(announceWith(events, '取消').text.startsWith('🛑')).toBe(true);
   });
 });

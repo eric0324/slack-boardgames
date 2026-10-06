@@ -60,5 +60,5 @@
 
 ## 11. 公告 GIF 與 emoji
 
-- [ ] 11.1 Engine 的 `announce` event 加上代表時刻的 `gif` 欄位（例如 `night`、`dawnDeath`、`dawnPeace`），公告開頭加上 emoji，開始公告提醒查看私訊；確認 announcement-gifs 中 emoji、提醒私訊，以及各時刻對應正確 `gif` 的測試通過
+- [x] 11.1 Engine 的 `announce` event 加上代表時刻的 `gif` 欄位（例如 `night`、`dawnDeath`、`dawnPeace`），公告開頭加上 emoji，開始公告提醒查看私訊；確認 announcement-gifs 中 emoji、提醒私訊，以及各時刻對應正確 `gif` 的測試通過
 - [ ] 11.2 新增 `src/gifs.ts` 設定檔，從 Giphy 挑選每個時刻的初始 GIF（使用小尺寸版本的網址），並確認每個網址都讀得到；Slack adapter 把有 `gif` 的公告送成文字加 image block，隨機選一張，沒有設定時只送文字；用假的 Slack client 確認「多張 GIF 隨機選」「沒有設定 GIF」的 scenarios 測試通過，README 說明怎麼替換 GIF

@@ -100,7 +100,7 @@ export interface Option {
 }
 
 export type GameEvent =
-  | { type: 'announce'; text: string }
+  | { type: 'announce'; text: string; gif?: GifKey }
   | { type: 'ephemeral'; to: string; text: string }
   | { type: 'dm'; to: string; text: string }
   | { type: 'wolfChat'; wolves: string[]; text: string }
@@ -109,6 +109,9 @@ export type GameEvent =
   | { type: 'startTimer'; id: number; ms: number };
 
 export type Rng = () => number;
+
+// 公告要搭配哪一種 GIF，實際網址由 adapter 的設定檔決定
+export type GifKey = 'start' | 'night' | 'dawnDeath' | 'dawnPeace' | 'exile' | 'hunterShot' | 'goodWin' | 'wolvesWin';
 
 interface Result {
   state: GameState;
@@ -183,7 +186,11 @@ function announceStart(c: Ctx) {
     .join('、');
   const wolves = wolfIds(s);
   c.events.push(
-    { type: 'announce', text: `遊戲開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n角色配置：${setup}` },
+    {
+      type: 'announce',
+      text: `🎲 遊戲開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n角色配置：${setup}\n身分已經用私訊傳給每個人，請到和 bot 的私訊查看。`,
+      gif: 'start',
+    },
     ...s.players.map((p): GameEvent => ({
       type: 'dm',
       to: p.id,
@@ -202,7 +209,7 @@ function enterNight(c: Ctx) {
   s.night = { wolfVotes: {}, seerDone: !seer, witchDone: false, saved: false, poisoned: null };
   const living = alive(s).map((p) => p.id);
   c.events.push(
-    { type: 'announce', text: `第 ${s.day} 夜，天黑請閉眼。` },
+    { type: 'announce', text: `🌙 第 ${s.day} 夜，天黑請閉眼。`, gif: 'night' },
     { type: 'prompt', kind: 'wolfKill', audience: 'wolves', text: '請選擇今晚要擊殺的玩家。', options: options(living) },
   );
   if (seer) {
@@ -320,9 +327,9 @@ function maybeResolveNight(c: Ctx) {
 function dawn(c: Ctx) {
   const deaths = c.s.lastDeaths;
   const text = deaths.length
-    ? `天亮了。昨晚死亡的是 ${deaths.map(mention).join('、')}。死亡的玩家請不要再發言。`
-    : '天亮了。昨晚是平安夜。';
-  c.events.push({ type: 'announce', text });
+    ? `☀️ 天亮了。昨晚死亡的是 ${deaths.map(mention).join('、')}。死亡的玩家請不要再發言。`
+    : '☀️ 天亮了。昨晚是平安夜。';
+  c.events.push({ type: 'announce', text, gif: deaths.length ? 'dawnDeath' : 'dawnPeace' });
   if (checkGameOver(c)) return;
   const n = c.s.night!;
   const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
@@ -353,7 +360,7 @@ function finishHunter(c: Ctx, target: string) {
   s.hunter = undefined;
   if (target !== 'none') {
     player(s, target).alive = false;
-    c.events.push({ type: 'announce', text: `獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。` });
+    c.events.push({ type: 'announce', text: `🔫 獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
     if (checkGameOver(c)) return;
   }
   if (next === 'discussion') startDiscussion(c);
@@ -364,7 +371,7 @@ function startDiscussion(c: Ctx) {
   c.s.phase = 'discussion';
   c.s.reminded = false;
   c.s.timers = {};
-  c.events.push({ type: 'announce', text: `開始討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
+  c.events.push({ type: 'announce', text: `💬 開始討論，時間 ${DISCUSSION_MS / 60_000} 分鐘。` });
   startTimer(c, 'phase', DISCUSSION_MS - REMIND_BEFORE_MS);
 }
 
@@ -384,7 +391,7 @@ function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters
     type: 'prompt',
     kind: phase === 'vote' ? 'dayVote' : 'pkVote',
     audience: 'channel',
-    text: phase === 'vote' ? '請投票選出要放逐的玩家。' : 'PK 投票：請在平票的玩家中選出要放逐的人（PK 中的玩家不能投票）。',
+    text: phase === 'vote' ? '🗳️ 請投票選出要放逐的玩家。' : '⚔️ PK 投票：請在平票的玩家中選出要放逐的人（PK 中的玩家不能投票）。',
     options: [...options(candidates), { value: 'abstain', label: '棄票' }],
   });
   startTimer(c, 'phase', ACTION_MS);
@@ -398,7 +405,7 @@ function startPk(c: Ctx, tied: string[]) {
   s.candidates = tied;
   c.events.push({
     type: 'announce',
-    text: `平票！${tied.map(mention).join('、')} 進入 PK，有 ${PK_SPEECH_MS / 60_000} 分鐘可以再次發言。`,
+    text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，有 ${PK_SPEECH_MS / 60_000} 分鐘可以再次發言。`,
   });
   startTimer(c, 'phase', PK_SPEECH_MS);
 }
@@ -409,14 +416,14 @@ function endVote(c: Ctx) {
     const t = s.votes[v] ?? 'abstain';
     return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
   });
-  c.events.push({ type: 'announce', text: `投票結果：\n${lines.join('\n')}` });
+  c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
   const top = mostVoted(Object.values(s.votes).filter((t) => t !== 'abstain'));
   if (top.length > 1 && s.phase === 'vote') {
     startPk(c, top);
     return;
   }
   if (top.length !== 1) {
-    c.events.push({ type: 'announce', text: '今天沒有人被放逐。' });
+    c.events.push({ type: 'announce', text: '🗳️ 今天沒有人被放逐。' });
     enterNight(c);
     return;
   }
@@ -425,7 +432,7 @@ function endVote(c: Ctx) {
 
 function exile(c: Ctx, id: string) {
   player(c.s, id).alive = false;
-  c.events.push({ type: 'announce', text: `${mention(id)} 被放逐了。` });
+  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 被放逐了。`, gif: 'exile' });
   if (checkGameOver(c)) return;
   if (player(c.s, id).role === 'hunter') startHunter(c, id, 'night');
   else enterNight(c);
@@ -440,8 +447,8 @@ function checkGameOver(c: Ctx): boolean {
   const roster = c.s.players
     .map((p) => `${mention(p.id)}：${ROLE_NAME[p.role!]}（${p.alive ? '存活' : '死亡'}）`)
     .join('\n');
-  const title = winner === 'good' ? '好人陣營獲勝！' : '狼人陣營獲勝！';
-  c.events.push({ type: 'announce', text: `遊戲結束，${title}\n${roster}` });
+  const title = winner === 'good' ? '🎉 遊戲結束，好人陣營獲勝！' : '🐺 遊戲結束，狼人陣營獲勝！';
+  c.events.push({ type: 'announce', text: `${title}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' });
   return true;
 }
 
@@ -469,7 +476,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了，不能離開。');
       if (action.user === s.host) {
         s.phase = 'ended';
-        c.events.push(lobbyEvent(s), { type: 'announce', text: '房主離開，遊戲已取消。' });
+        c.events.push(lobbyEvent(s), { type: 'announce', text: '🛑 房主離開，遊戲已取消。' });
         return true;
       }
       s.players = s.players.filter((p) => p.id !== action.user);
@@ -512,7 +519,7 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'cancel': {
       if (action.user !== s.host) return reply(c, action.user, '只有房主可以取消遊戲。');
       s.phase = 'ended';
-      c.events.push({ type: 'announce', text: '房主已取消遊戲。' });
+      c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
     case 'wolfVote': {
@@ -603,7 +610,7 @@ function handle(c: Ctx, action: GameAction): boolean {
           startVote(c);
         } else {
           s.reminded = true;
-          c.events.push({ type: 'announce', text: '討論時間剩下 1 分鐘。' });
+          c.events.push({ type: 'announce', text: '💬 討論時間剩下 1 分鐘。' });
           startTimer(c, 'phase', REMIND_BEFORE_MS);
         }
         return true;
