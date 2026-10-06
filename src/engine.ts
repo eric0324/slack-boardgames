@@ -144,6 +144,7 @@ export function checkWinner(players: Player[]): 'good' | 'wolves' | null {
   return null;
 }
 
+const player = (s: GameState, id: string) => s.players.find((p) => p.id === id)!;
 const alive = (s: GameState) => s.players.filter((p) => p.alive);
 const aliveWith = (s: GameState, role: Role) => alive(s).filter((p) => p.role === role);
 const isAlive = (s: GameState, id: string) => alive(s).some((p) => p.id === id);
@@ -163,13 +164,12 @@ function startTimer(c: Ctx, name: TimerName, ms: number) {
   c.events.push({ type: 'startTimer', id, ms });
 }
 
-// 從票數最高的人裡隨機選一位；沒有票就回傳 null
-function topVoted(votes: string[], rng: Rng): string | null {
+// 回傳得票最多的人（平手時有多位，沒有票時是空陣列）
+function mostVoted(votes: string[]): string[] {
   const tally = new Map<string, number>();
   for (const v of votes) tally.set(v, (tally.get(v) ?? 0) + 1);
   const max = Math.max(0, ...tally.values());
-  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
-  return top.length ? top[Math.floor(rng() * top.length)] : null;
+  return [...tally].filter(([, k]) => k === max).map(([id]) => id);
 }
 
 function announceStart(c: Ctx) {
@@ -216,7 +216,8 @@ function enterNight(c: Ctx) {
 
 function decideWolves(c: Ctx) {
   const n = c.s.night!;
-  n.wolfTarget = topVoted(Object.values(n.wolfVotes), c.rng);
+  const top = mostVoted(Object.values(n.wolfVotes));
+  n.wolfTarget = top.length ? top[Math.floor(c.rng() * top.length)] : null;
   const text = n.wolfTarget ? `今晚的目標是 ${mention(n.wolfTarget)}。` : '今晚沒有擊殺目標。';
   c.events.push({ type: 'wolfChat', wolves: wolfIds(c.s), text });
   startTimer(c, 'witch', ACTION_MS);
@@ -297,7 +298,7 @@ function finishHunter(c: Ctx, target: string) {
   const { id, next } = s.hunter!;
   s.hunter = undefined;
   if (target !== 'none') {
-    s.players.find((p) => p.id === target)!.alive = false;
+    player(s, target).alive = false;
     c.events.push({ type: 'announce', text: `獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。` });
     if (checkGameOver(c)) return;
   }
@@ -355,10 +356,7 @@ function endVote(c: Ctx) {
     return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
   });
   c.events.push({ type: 'announce', text: `投票結果：\n${lines.join('\n')}` });
-  const tally = new Map<string, number>();
-  for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
-  const max = Math.max(0, ...tally.values());
-  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  const top = mostVoted(Object.values(s.votes).filter((t) => t !== 'abstain'));
   if (top.length > 1 && s.phase === 'vote') {
     startPk(c, top);
     return;
@@ -372,10 +370,10 @@ function endVote(c: Ctx) {
 }
 
 function exile(c: Ctx, id: string) {
-  c.s.players.find((p) => p.id === id)!.alive = false;
+  player(c.s, id).alive = false;
   c.events.push({ type: 'announce', text: `${mention(id)} 被放逐了。` });
   if (checkGameOver(c)) return;
-  if (c.s.players.find((p) => p.id === id)!.role === 'hunter') startHunter(c, id, 'night');
+  if (player(c.s, id).role === 'hunter') startHunter(c, id, 'night');
   else enterNight(c);
 }
 
@@ -455,7 +453,7 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       if (!aliveWith(s, 'seer').some((p) => p.id === action.user)) return false;
       if (action.target === action.user || !isAlive(s, action.target)) return false;
       n.seerDone = true;
-      const target = s.players.find((p) => p.id === action.target)!;
+      const target = player(s, action.target);
       const side = target.role === 'werewolf' ? '狼人' : '好人';
       c.events.push({ type: 'dm', to: action.user, text: `${mention(target.id)} 是${side}。` });
       return true;
@@ -487,9 +485,9 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
     }
     case 'dayVote': {
       if (s.phase !== 'vote' && s.phase !== 'pkVote') return false;
-      const player = s.players.find((p) => p.id === action.user);
-      if (!player) return false;
-      if (!player.alive) return reply(c, action.user, '你已經死亡，無法投票。');
+      const voter = s.players.find((p) => p.id === action.user);
+      if (!voter) return false;
+      if (!voter.alive) return reply(c, action.user, '你已經死亡，無法投票。');
       if (!s.voters.includes(action.user)) return reply(c, action.user, 'PK 中的玩家不能投票。');
       if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
       s.votes[action.user] = action.target;
