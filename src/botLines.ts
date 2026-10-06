@@ -159,3 +159,44 @@ export function randomBotName(rng: Rng, taken: Set<string>): string {
   const available = BOT_NAMES.filter((name) => !taken.has(name));
   return pick(available.length ? available : BOT_NAMES, rng);
 }
+
+// ---- 身分台詞（bot 依身分發言時用；這裡會出現角色名稱） ----
+// target 等參數都是已經轉好的顯示文字（例如 <@U123> 或 🤖Sam）
+
+export interface CheckLine {
+  night: number;
+  target: string;
+  wolf: boolean;
+}
+
+// 「我是預言家，第 1 晚查了 X，是狼人；第 2 晚查了 Y，是好人。」真的預言家和悍跳的狼人用同一個格式
+export function seerClaim(checks: CheckLine[]): string {
+  const parts = checks.map((c) => `第 ${c.night} 晚查了 ${c.target}，是${c.wolf ? '狼人' : '好人'}`);
+  return `我是預言家，${parts.join('；')}。`;
+}
+
+const FOLLOW_CLAIMS = [
+  '{t} 被報查殺了，我跟著投 {t}。',
+  '既然 {t} 被查殺，今天就出 {t}。',
+  '我相信查驗，票投 {t}。',
+  '{t} 被點名是狼人，大家一起投 {t}。',
+];
+
+const COUNTER_CLAIMS = [
+  '{t} 的查驗是亂報的，我覺得 {t} 才可疑。',
+  '{t} 一直在亂點人，太刻意了，我投 {t}。',
+  '不要被 {t} 帶走，{t} 的發言很有問題。',
+];
+
+export const followClaim = (target: string, rng: Rng) => pick(FOLLOW_CLAIMS, rng).replaceAll('{t}', target);
+export const counterClaim = (target: string, rng: Rng) => pick(COUNTER_CLAIMS, rng).replaceAll('{t}', target);
+
+export function witchReveal(log: { night: number; saved?: string; poisoned?: string }[]): string {
+  const parts = log.map((l) => (l.saved ? `第 ${l.night} 晚救了 ${l.saved}` : `第 ${l.night} 晚毒了 ${l.poisoned}`));
+  return parts.length ? `我是女巫，${parts.join('、')}，別投我！` : '我是女巫，藥都還在，別投我！';
+}
+
+export const hunterReveal = () => '我是獵人，投我出局我會開槍帶人走，想清楚再投。';
+
+export const knightReveal = (used: boolean) =>
+  used ? '我是騎士，已經決鬥過了，我是好人！' : '我是騎士，留著我還有用，別投我！';
