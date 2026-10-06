@@ -4,7 +4,7 @@
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = 12;
 
-export type Phase = 'lobby' | 'night' | 'discussion' | 'vote' | 'ended';
+export type Phase = 'lobby' | 'night' | 'discussion' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 export type Role = 'werewolf' | 'seer' | 'witch' | 'hunter' | 'villager';
 
 // 人數 → 各角色數量（順序也是不洗牌時的發牌順序）
@@ -38,6 +38,7 @@ export const mention = (id: string) => `<@${id}>`;
 
 export const ACTION_MS = 60_000;
 export const DISCUSSION_MS = 5 * 60_000;
+export const PK_SPEECH_MS = 2 * 60_000;
 const REMIND_BEFORE_MS = 60_000;
 
 export interface Player {
@@ -278,20 +279,38 @@ function startDiscussion(c: Ctx) {
 }
 
 function startVote(c: Ctx) {
+  const ids = alive(c.s).map((p) => p.id);
+  openVote(c, 'vote', ids, ids);
+}
+
+function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters: string[]) {
   const s = c.s;
-  s.phase = 'vote';
+  s.phase = phase;
   s.timers = {};
   s.votes = {};
-  s.candidates = alive(s).map((p) => p.id);
-  s.voters = s.candidates;
+  s.candidates = candidates;
+  s.voters = voters;
   c.events.push({
     type: 'prompt',
-    kind: 'dayVote',
+    kind: phase === 'vote' ? 'dayVote' : 'pkVote',
     audience: 'channel',
-    text: '請投票選出要放逐的玩家。',
-    options: [...options(s.candidates), { value: 'abstain', label: '棄票' }],
+    text: phase === 'vote' ? '請投票選出要放逐的玩家。' : 'PK 投票：請在平票的玩家中選出要放逐的人（PK 中的玩家不能投票）。',
+    options: [...options(candidates), { value: 'abstain', label: '棄票' }],
   });
   startTimer(c, 'phase', ACTION_MS);
+  if (voters.length === 0) endVote(c);
+}
+
+function startPk(c: Ctx, tied: string[]) {
+  const s = c.s;
+  s.phase = 'pkSpeech';
+  s.timers = {};
+  s.candidates = tied;
+  c.events.push({
+    type: 'announce',
+    text: `平票！${tied.map(mention).join('、')} 進入 PK，有 ${PK_SPEECH_MS / 60_000} 分鐘可以再次發言。`,
+  });
+  startTimer(c, 'phase', PK_SPEECH_MS);
 }
 
 function endVote(c: Ctx) {
@@ -305,6 +324,10 @@ function endVote(c: Ctx) {
   for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
   const max = Math.max(0, ...tally.values());
   const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  if (top.length > 1 && s.phase === 'vote') {
+    startPk(c, top);
+    return;
+  }
   if (top.length !== 1) {
     c.events.push({ type: 'announce', text: '今天沒有人被放逐。' });
     enterNight(c);
@@ -427,10 +450,11 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       return true;
     }
     case 'dayVote': {
-      if (s.phase !== 'vote') return false;
+      if (s.phase !== 'vote' && s.phase !== 'pkVote') return false;
       const player = s.players.find((p) => p.id === action.user);
       if (!player) return false;
       if (!player.alive) return reply(c, action.user, '你已經死亡，無法投票。');
+      if (!s.voters.includes(action.user)) return reply(c, action.user, 'PK 中的玩家不能投票。');
       if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
       s.votes[action.user] = action.target;
       const choice = action.target === 'abstain' ? '你選擇棄票。' : `你投給了 ${mention(action.target)}。`;
@@ -461,8 +485,13 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
         }
         return true;
       }
-      if (action.id === s.timers.phase && s.phase === 'vote') {
+      if (action.id === s.timers.phase && (s.phase === 'vote' || s.phase === 'pkVote')) {
         endVote(c);
+        return true;
+      }
+      if (action.id === s.timers.phase && s.phase === 'pkSpeech') {
+        const voters = alive(s).filter((p) => !s.candidates.includes(p.id)).map((p) => p.id);
+        openVote(c, 'pkVote', s.candidates, voters);
         return true;
       }
       return false;

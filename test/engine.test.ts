@@ -674,3 +674,51 @@ describe('night-phase: 預言家已經死亡', () => {
     expect(prompts(events, 'wolfKill')).toHaveLength(1);
   });
 });
+
+// p1 和 p4 各 3 票平手，進入 PK；PK 投票者是 p2、p3、p5、p6、p8
+const tied = () =>
+  run(
+    votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p4', 'p1'], ['p5', 'p1'], ['p6', 'p1'], ['p8', 'abstain']]),
+    voting().state,
+  );
+const pkVoting = () => {
+  const t = tied();
+  return run([{ type: 'timeout', id: lastTimer(t.events).id }], t.state);
+};
+
+describe('day-phase: 平票 PK', () => {
+  it('平票時平手的玩家有 2 分鐘發言', () => {
+    const { state, events } = tied();
+    expect(state.phase).toBe('pkSpeech');
+    const pk = announces(events).find((t) => t.includes('PK'))!;
+    expect(pk).toContain('<@p1>');
+    expect(pk).toContain('<@p4>');
+    expect(lastTimer(events).ms).toBe(2 * 60_000);
+  });
+
+  it('PK 投票只能投平票的玩家或棄票', () => {
+    const [p] = prompts(pkVoting().events, 'pkVote');
+    expect(new Set(values(p))).toEqual(new Set(['p1', 'p4', 'abstain']));
+  });
+
+  it('PK 後分出勝負', () => {
+    const { state } = run(votes([['p2', 'p4'], ['p3', 'p4'], ['p5', 'p4'], ['p6', 'p1'], ['p8', 'p1']]), pkVoting().state);
+    expect(isDead(state, 'p4')).toBe(true);
+    expect(isDead(state, 'p1')).toBe(false);
+  });
+
+  it('PK 後仍然平票：沒有人被放逐，進入下一個夜晚', () => {
+    const { state, events } = run(
+      votes([['p2', 'p4'], ['p3', 'p4'], ['p5', 'p1'], ['p6', 'p1'], ['p8', 'abstain']]),
+      pkVoting().state,
+    );
+    expect(announces(events)).toContainEqual(expect.stringContaining('沒有人被放逐'));
+    expect(state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('PK 中的玩家不能投票', () => {
+    const after = run(votes([['p1', 'p4']]), pkVoting().state);
+    expect(after.state.votes.p1).toBeUndefined();
+    expect(ephemeralTo(after.events, 'p1')).toMatchObject({ text: expect.stringContaining('PK') });
+  });
+});
