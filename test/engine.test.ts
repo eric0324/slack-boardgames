@@ -1913,3 +1913,80 @@ describe('bot-players: 狼人 bot 不懷疑也不投隊友（整局檢查）', (
     }
   });
 });
+
+describe('bot-players: bot 理解真人的發言', () => {
+  // withBots 天亮後：輪流發言順序 bot4 → p1（真人，正在發言）→ bot1 → bot2 → bot3；bot5 第一夜死亡
+  const dayAtP1 = () => {
+    const { state } = withBots();
+    const day = applyAction(state, { type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes[botId(state, 1)] }, () => 0.99999).state;
+    expect(day.speaker).toBe('p1');
+    return day;
+  };
+  // 房主一路跳過發言直到進入投票
+  const toVote = (s: GameState) => {
+    let r = { state: s, events: [] as GameEvent[] };
+    let events: GameEvent[] = [];
+    while (r.state.phase === 'speech') {
+      r = run([{ type: 'skipSpeaker', user: 'p1' }], r.state);
+      events = events.concat(r.events);
+    }
+    return { state: r.state, events };
+  };
+
+  it('真人預言家報查殺：之後的好人 bot 懷疑並投給那個人', () => {
+    const day = dayAtP1();
+    const target = botId(day, 4);
+    const after = run([{ type: 'chat', user: 'p1', text: `我是預言家，查殺 ${mention(target)}` }], day).state;
+    expect(after.claims).toContainEqual({ by: 'p1', night: 1, target, wolf: true });
+    const witch = botId(day, 3);
+    const vote = toVote(after).state;
+    expect(vote.suspects[witch]).toBe(target);
+    expect(vote.votes[witch]).toBe(target);
+  });
+
+  it('一則訊息報兩個結果', () => {
+    const day = dayAtP1();
+    const [a, b] = [botId(day, 3), botId(day, 4)];
+    const name = (id: string) => id.split(':')[2];
+    const after = run([{ type: 'chat', user: 'p1', text: `我預言家，第一晚查殺 ${name(a)}，第二晚金水 ${name(b)}` }], day).state;
+    expect(after.claims).toEqual(
+      expect.arrayContaining([
+        { by: 'p1', night: 1, target: a, wolf: true },
+        { by: 'p1', night: 1, target: b, wolf: false },
+      ]),
+    );
+  });
+
+  it('沒跳預言家只是懷疑：神職 bot 被懷疑時亮身分', () => {
+    const day = dayAtP1();
+    const witch = botId(day, 3);
+    const after = run([{ type: 'chat', user: 'p1', text: `我覺得 ${mention(witch)} 很可疑` }], day).state;
+    expect(after.claims).toEqual([]);
+    expect(after.suspects.p1).toBe(witch);
+    const { events } = toVote(after);
+    expect(announces(events).find((t) => t.startsWith(`${mention(witch)}：`))).toContain('我是女巫');
+  });
+
+  it('自稱神職的真人被當成好人，好人 bot 不優先懷疑', () => {
+    const day = dayAtP1();
+    const after = run([{ type: 'chat', user: 'p1', text: '我是獵人，別投我' }], day).state;
+    expect(after.godClaims).toEqual({ p1: 'hunter' });
+  });
+
+  it('夜晚的訊息、不在遊戲中的人、bot 的訊息都忽略，而且不會回應', () => {
+    const night = withBots().state;
+    expect(run([{ type: 'chat', user: 'p1', text: '我是預言家，查殺 Sam' }], night)).toEqual({ state: night, events: [] });
+    const day = dayAtP1();
+    expect(run([{ type: 'chat', user: 'X', text: '我是預言家，查殺 <@p1>' }], day)).toEqual({ state: day, events: [] });
+  });
+
+  it('狼人 bot 反咬報出它是狼人的真人預言家', () => {
+    const day = dayAtP1();
+    const wolf = botId(day, 1);
+    // 把 p1 改成村民（真人好人），讓 p1 跳預言家查殺狼人 bot
+    const good = { ...day, players: day.players.map((p) => (p.id === 'p1' ? { ...p, role: 'villager' as Role } : p)) };
+    const after = run([{ type: 'chat', user: 'p1', text: `我是預言家，查殺 ${mention(wolf)}` }], good).state;
+    const vote = toVote(after).state;
+    expect(vote.suspects[wolf]).toBe('p1');
+  });
+});
