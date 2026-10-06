@@ -444,6 +444,8 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       if (s.phase !== 'night' || !n || n.wolfTarget !== undefined) return false;
       if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user) || !isAlive(s, action.target)) return false;
       n.wolfVotes[action.user] = action.target;
+      const picked = `${mention(action.user)} 選擇擊殺 ${mention(action.target)}。`;
+      c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text: picked });
       if (aliveWith(s, 'werewolf').every((w) => n.wolfVotes[w.id])) decideWolves(c);
       return true;
     }
@@ -466,12 +468,16 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
         if (!canSave(s, action.user)) return false;
         n.saved = true;
         s.potions.antidote = false;
+        c.events.push({ type: 'dm', to: action.user, text: `你對 ${mention(n.wolfTarget!)} 使用了解藥。` });
       } else if (action.choice.startsWith('poison:')) {
         const target = action.choice.slice('poison:'.length);
         if (!s.potions.poison || target === action.user || !isAlive(s, target)) return false;
         n.poisoned = target;
         s.potions.poison = false;
-      } else if (action.choice !== 'skip') {
+        c.events.push({ type: 'dm', to: action.user, text: `你對 ${mention(target)} 使用了毒藥。` });
+      } else if (action.choice === 'skip') {
+        c.events.push({ type: 'dm', to: action.user, text: '你今晚不使用藥。' });
+      } else {
         return false;
       }
       n.witchDone = true;
@@ -499,6 +505,7 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
     case 'hunterShoot': {
       if (s.phase !== 'hunter' || action.user !== s.hunter?.id) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
+      if (action.target === 'none') c.events.push({ type: 'dm', to: action.user, text: '你選擇不開槍。' });
       finishHunter(c, action.target);
       return true;
     }

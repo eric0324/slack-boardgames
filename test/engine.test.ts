@@ -859,3 +859,27 @@ describe('game-lobby: 取消後計時器失效', () => {
     expect(run([{ type: 'timeout', id: oldTimer }], fresh.state).events).toEqual([]);
   });
 });
+
+describe('按鈕確認訊息', () => {
+  it('狼人選擇或改選時，狼人對話公布誰選擇擊殺誰', () => {
+    const first = run([{ type: 'wolfVote', user: 'p1', target: 'p7' }], started(8).state);
+    expect(first.events).toContainEqual({ type: 'wolfChat', wolves: ['p1', 'p2', 'p3'], text: '<@p1> 選擇擊殺 <@p7>。' });
+    const changed = run([{ type: 'wolfVote', user: 'p1', target: 'p8' }], first.state);
+    expect(wolfChatText(changed.events)).toContain('<@p1> 選擇擊殺 <@p8>。');
+  });
+
+  it('女巫行動後收到私訊確認', () => {
+    const night = wolvesKill('p7').state;
+    const dmTo = (choice: string) =>
+      run([{ type: 'witchAct', user: 'p5', choice }], night).events.find((e) => e.type === 'dm' && e.to === 'p5');
+    expect(dmTo('save')).toMatchObject({ text: '你對 <@p7> 使用了解藥。' });
+    expect(dmTo('poison:p1')).toMatchObject({ text: '你對 <@p1> 使用了毒藥。' });
+    expect(dmTo('skip')).toMatchObject({ text: '你今晚不使用藥。' });
+  });
+
+  it('獵人選擇不開槍後收到私訊確認，頻道沒有訊息', () => {
+    const { events } = run([{ type: 'hunterShoot', user: 'p6', target: 'none' }], fullNight('p6', 'skip').state);
+    expect(events).toContainEqual({ type: 'dm', to: 'p6', text: '你選擇不開槍。' });
+    expect(announces(events).some((t) => t.includes('開槍'))).toBe(false);
+  });
+});
