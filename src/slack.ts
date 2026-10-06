@@ -29,7 +29,7 @@ const HELP = [
   '• `/werewolf removebot [數量]`：移除 bot（房主，開始前）',
   '• `/werewolf start`：開始遊戲，需要 6～12 人（房主）',
   '• `/werewolf next`：跳過目前的發言者或遺言（房主）',
-  '• `/werewolf vote`：結束發言或討論，直接投票（房主）',
+  '• `/werewolf vote`：結束輪流發言，直接投票（房主）',
   '• `/werewolf cancel`：取消遊戲（房主）',
   '• `/werewolf stats [@某人]`：查詢自己或別人在這個頻道的戰績（任何人）',
   `📖 完整說明：<${encodeURI('https://github.com/eric0324/slack-werewolve/wiki/指令')}|指令>、<${RULES_URL}|遊戲規則>`,

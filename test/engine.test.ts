@@ -659,20 +659,16 @@ describe('day-phase: 輪流發言', () => {
     expect(day.state.speaker).toBe('p1');
   });
 
-  it('全部講完進入 1 分 30 秒自由討論，時間到進入投票', () => {
+  it('全部講完直接進入投票，沒有自由討論', () => {
     const { state } = dawned('p7', 'skip');
     const done = run(['p8', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'endSpeech', user }) as Action), state);
-    expect(done.state.phase).toBe('discussion');
-    expect(announces(done.events)).toContainEqual(expect.stringContaining('開始自由討論，時間 1 分 30 秒'));
-    expect(lastTimer(done.events).ms).toBe(90_000);
-    expect(run([{ type: 'timeout', id: lastTimer(done.events).id }], done.state).state.phase).toBe('vote');
+    expect(done.state.phase).toBe('vote');
+    expect(announces(done.events).some((t) => t.includes('自由討論'))).toBe(false);
   });
 
-  it('房主可以在輪流發言或自由討論時直接進入投票，非房主不行', () => {
+  it('房主可以在輪流發言時直接進入投票，非房主不行', () => {
     const { state } = dawned('p7', 'skip');
     expect(run([{ type: 'endDiscussion', user: 'p1' }], state).state.phase).toBe('vote');
-    const free = run(['p8', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((user) => ({ type: 'endSpeech', user }) as Action), state).state;
-    expect(run([{ type: 'endDiscussion', user: 'p1' }], free).state.phase).toBe('vote');
     const denied = run([{ type: 'endDiscussion', user: 'p2' }], state);
     expect(denied.state.phase).toBe('speech');
     expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
@@ -1420,7 +1416,6 @@ const day9 = () =>
       started(9).state,
     ),
   );
-const order9 = ['p9', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
 
 describe('day-phase: 騎士決鬥', () => {
   it('輪流發言開始時，騎士收到決鬥按鈕', () => {
@@ -1431,10 +1426,8 @@ describe('day-phase: 騎士決鬥', () => {
     expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p9']);
   });
 
-  it('自由討論時決鬥到狼人：狼人出局、沒有遺言，直接進入夜晚', () => {
-    const free = run(order9.map((user) => ({ type: 'endSpeech', user }) as Action), day9().state).state;
-    expect(free.phase).toBe('discussion');
-    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], free);
+  it('輪流發言時決鬥到狼人：狼人出局、沒有遺言，直接進入夜晚', () => {
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], day9().state);
     expect(announces(events)).toContainEqual(expect.stringContaining('🗡️ 騎士 <@p7> 翻牌，向 <@p1> 發起決鬥！'));
     expect(isDead(state, 'p1')).toBe(true);
     expect(prompts(events, 'endSpeech')).toEqual([]);
@@ -1457,7 +1450,7 @@ describe('day-phase: 騎士決鬥', () => {
     const after = run([{ type: 'duel', user: 'p7', target: 'p4' }], s).state;
     expect(isDead(after, 'p7')).toBe(true);
     expect(after.speaker).not.toBe('p7');
-    expect(after.phase).toBe('discussion');
+    expect(after.phase).toBe('vote');
   });
 
   it('只能決鬥一次：之後不會再收到按鈕，再按也沒有作用', () => {
