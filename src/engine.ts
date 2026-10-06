@@ -69,6 +69,9 @@ export interface GameState {
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
   reminded: boolean; // 討論時間是否已經提醒過剩 1 分鐘
+  votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
+  candidates: string[]; // 這輪可以被投的人
+  voters: string[]; // 這輪可以投票的人
 }
 
 export type Action =
@@ -81,6 +84,7 @@ export type Action =
   | { type: 'seerCheck'; user: string; target: string }
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
   | { type: 'endDiscussion'; user: string }
+  | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -274,8 +278,46 @@ function startDiscussion(c: Ctx) {
 }
 
 function startVote(c: Ctx) {
-  c.s.phase = 'vote';
-  c.s.timers = {};
+  const s = c.s;
+  s.phase = 'vote';
+  s.timers = {};
+  s.votes = {};
+  s.candidates = alive(s).map((p) => p.id);
+  s.voters = s.candidates;
+  c.events.push({
+    type: 'prompt',
+    kind: 'dayVote',
+    audience: 'channel',
+    text: '請投票選出要放逐的玩家。',
+    options: [...options(s.candidates), { value: 'abstain', label: '棄票' }],
+  });
+  startTimer(c, 'phase', ACTION_MS);
+}
+
+function endVote(c: Ctx) {
+  const s = c.s;
+  const lines = s.voters.map((v) => {
+    const t = s.votes[v] ?? 'abstain';
+    return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
+  });
+  c.events.push({ type: 'announce', text: `投票結果：\n${lines.join('\n')}` });
+  const tally = new Map<string, number>();
+  for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
+  const max = Math.max(0, ...tally.values());
+  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  if (top.length !== 1) {
+    c.events.push({ type: 'announce', text: '今天沒有人被放逐。' });
+    enterNight(c);
+    return;
+  }
+  exile(c, top[0]);
+}
+
+function exile(c: Ctx, id: string) {
+  c.s.players.find((p) => p.id === id)!.alive = false;
+  c.events.push({ type: 'announce', text: `${mention(id)} 被放逐了。` });
+  if (checkGameOver(c)) return;
+  enterNight(c);
 }
 
 // 有人死亡後呼叫；勝負已定就結束遊戲並公開身分，回傳 true
@@ -384,6 +426,18 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
       startVote(c);
       return true;
     }
+    case 'dayVote': {
+      if (s.phase !== 'vote') return false;
+      const player = s.players.find((p) => p.id === action.user);
+      if (!player) return false;
+      if (!player.alive) return reply(c, action.user, '你已經死亡，無法投票。');
+      if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
+      s.votes[action.user] = action.target;
+      const choice = action.target === 'abstain' ? '你選擇棄票。' : `你投給了 ${mention(action.target)}。`;
+      c.events.push({ type: 'ephemeral', to: action.user, text: choice });
+      if (s.voters.every((v) => s.votes[v])) endVote(c);
+      return true;
+    }
     case 'timeout': {
       const n = s.night;
       if (action.id === s.timers.wolves && n) {
@@ -407,6 +461,10 @@ function handle(c: Ctx, action: Exclude<Action, { type: 'new' }>): boolean {
         }
         return true;
       }
+      if (action.id === s.timers.phase && s.phase === 'vote') {
+        endVote(c);
+        return true;
+      }
       return false;
     }
   }
@@ -428,6 +486,9 @@ export function applyAction(state: GameState | undefined, action: Action, rng: R
       potions: { antidote: true, poison: true },
       lastDeaths: [],
       reminded: false,
+      votes: {},
+      candidates: [],
+      voters: [],
     };
     return { state: created, events: [lobbyEvent(created)] };
   }

@@ -595,3 +595,82 @@ describe('day-phase: 討論時間', () => {
     expect(ephemeralTo(after.events, 'p2')).toBeDefined();
   });
 });
+
+// 第一夜 p7 死亡，存活 p1~p6、p8（狼人 p1~p3）。房主結束討論，進入投票
+const voting = () => run([{ type: 'endDiscussion', user: 'p1' }], fullNight('p7', 'skip').state);
+const votes = (pairs: [string, string][]) => pairs.map(([user, target]) => ({ type: 'dayVote', user, target }) as Action);
+
+describe('day-phase: 放逐投票', () => {
+  it('投票訊息列出所有存活玩家和棄票，計時 60 秒', () => {
+    const { events } = voting();
+    const [p] = prompts(events, 'dayVote');
+    expect(p.audience).toBe('channel');
+    expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p8', 'abstain']);
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('投票期間只有本人看到自己投給誰', () => {
+    const { events } = run(votes([['p1', 'p4']]), voting().state);
+    expect(events).toEqual([{ type: 'ephemeral', to: 'p1', text: expect.stringContaining('<@p4>') }]);
+  });
+
+  it('單一最高票被放逐，公開每個人的投票，不公開角色', () => {
+    const { state, events } = run(
+      votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p5', 'p1'], ['p6', 'p1'], ['p4', 'abstain'], ['p8', 'abstain']]),
+      voting().state,
+    );
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p1> → <@p4>');
+    expect(text).toContain('<@p8> → 棄票');
+    expect(text).toContain('<@p4> 被放逐');
+    expect(text).not.toContain('預言家');
+    expect(isDead(state, 'p4')).toBe(true);
+  });
+
+  it('時限內可以改票', () => {
+    const { state } = run(votes([['p1', 'p4'], ['p1', 'p5']]), voting().state);
+    expect(state.votes.p1).toBe('p5');
+  });
+
+  it('時間到沒投票的人算棄票', () => {
+    const { state, events } = voting();
+    const after = run([...votes([['p1', 'p4']]), { type: 'timeout', id: lastTimer(events).id }], state);
+    expect(announces(after.events).join('\n')).toContain('<@p2> → 棄票');
+    expect(isDead(after.state, 'p4')).toBe(true);
+  });
+
+  it('全部棄票：沒有人被放逐，進入下一個夜晚', () => {
+    const living = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p8'];
+    const { state, events } = run(votes(living.map((u) => [u, 'abstain'])), voting().state);
+    expect(announces(events)).toContainEqual(expect.stringContaining('沒有人被放逐'));
+    expect(state).toMatchObject({ phase: 'night', day: 2 });
+  });
+});
+
+describe('day-phase: 死亡玩家的限制', () => {
+  it('死亡玩家不能投票', () => {
+    const { state } = voting();
+    const after = run(votes([['p7', 'p1']]), state);
+    expect(after.state.votes.p7).toBeUndefined();
+    expect(ephemeralTo(after.events, 'p7')).toMatchObject({ text: expect.stringContaining('已經死亡') });
+  });
+});
+
+describe('night-phase: 預言家已經死亡', () => {
+  it('第二夜不發查驗提示', () => {
+    const night1 = run(
+      [
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+        ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p4' }) as Action),
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+        { type: 'endDiscussion', user: 'p1' },
+      ],
+      started(8).state,
+    ).state;
+    const living = ['p1', 'p2', 'p3', 'p5', 'p6', 'p7', 'p8'];
+    const { state, events } = run(votes(living.map((u) => [u, 'abstain'])), night1);
+    expect(state.day).toBe(2);
+    expect(prompts(events, 'seerCheck')).toEqual([]);
+    expect(prompts(events, 'wolfKill')).toHaveLength(1);
+  });
+});
