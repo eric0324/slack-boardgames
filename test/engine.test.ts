@@ -1379,3 +1379,94 @@ describe('win-condition: 再來一局', () => {
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], state).events).toEqual([]);
   });
 });
+
+// 9 人局：p1~p3 狼人、p4 預言家、p5 女巫、p6 獵人、p7 騎士、p8、p9 村民
+// 第一夜 p8 死亡，遺言跳過後進入輪流發言，順序 p9 → p1 → … → p7
+const day9 = () =>
+  skipLastWords(
+    run(
+      [
+        ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'p8' }) as Action),
+        { type: 'seerCheck', user: 'p4', target: 'p1' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      started(9).state,
+    ),
+  );
+const order9 = ['p9', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+
+describe('day-phase: 騎士決鬥', () => {
+  it('輪流發言開始時，騎士收到決鬥按鈕', () => {
+    const { state, events } = day9();
+    expect(state.phase).toBe('speech');
+    const [p] = prompts(events, 'duel');
+    expect(p).toMatchObject({ audience: 'user', user: 'p7' });
+    expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p9']);
+  });
+
+  it('自由討論時決鬥到狼人：狼人出局、沒有遺言，直接進入夜晚', () => {
+    const free = run(order9.map((user) => ({ type: 'endSpeech', user }) as Action), day9().state).state;
+    expect(free.phase).toBe('discussion');
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], free);
+    expect(announces(events)).toContainEqual(expect.stringContaining('🗡️ 騎士 <@p7> 翻牌，向 <@p1> 發起決鬥！'));
+    expect(isDead(state, 'p1')).toBe(true);
+    expect(prompts(events, 'endSpeech')).toEqual([]);
+    expect(state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('輪流發言時決鬥到好人：騎士出局，發言照常，順序中不再有騎士', () => {
+    const day = day9().state;
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p4' }], day);
+    expect(announces(events)).toContainEqual(expect.stringContaining('好人'));
+    expect(isDead(state, 'p7')).toBe(true);
+    expect(isDead(state, 'p4')).toBe(false);
+    expect(state).toMatchObject({ phase: 'speech', speaker: 'p9' });
+    expect(state.speakers).not.toContain('p7');
+  });
+
+  it('騎士正在發言時決鬥失敗：立刻換下一位', () => {
+    let s = day9().state;
+    while (s.speaker !== 'p7') s = run([{ type: 'skipSpeaker', user: 'p1' }], s).state;
+    const after = run([{ type: 'duel', user: 'p7', target: 'p4' }], s).state;
+    expect(isDead(after, 'p7')).toBe(true);
+    expect(after.speaker).not.toBe('p7');
+    expect(after.phase).toBe('discussion');
+  });
+
+  it('只能決鬥一次：之後不會再收到按鈕，再按也沒有作用', () => {
+    const night2 = run([{ type: 'duel', user: 'p7', target: 'p1' }], day9().state).state;
+    const day2 = run(
+      [
+        { type: 'seerCheck', user: 'p4', target: 'p2' },
+        { type: 'wolfVote', user: 'p2', target: 'p4' },
+        { type: 'wolfVote', user: 'p3', target: 'p4' },
+        { type: 'witchAct', user: 'p5', choice: 'skip' },
+      ],
+      night2,
+    );
+    expect(day2.state.phase).toBe('speech');
+    expect(prompts(day2.events, 'duel')).toEqual([]);
+    expect(run([{ type: 'duel', user: 'p7', target: 'p2' }], day2.state).events).toEqual([]);
+  });
+
+  it('投票時不能決鬥', () => {
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], day9().state).state;
+    const after = run([{ type: 'duel', user: 'p7', target: 'p1' }], vote);
+    expect(isDead(after.state, 'p1')).toBe(false);
+    expect(ephemeralTo(after.events, 'p7')).toMatchObject({ text: '現在不能決鬥。' });
+  });
+
+  it('決鬥到最後一名狼人：好人獲勝', () => {
+    const lastWolf = kill(day9().state, 'p2', 'p3');
+    const { state, events } = run([{ type: 'duel', user: 'p7', target: 'p1' }], lastWolf);
+    expect(state.phase).toBe('ended');
+    expect(announces(events)).toContainEqual(expect.stringContaining('好人陣營獲勝'));
+  });
+
+  it('bot 騎士不會決鬥', () => {
+    const { state } = run([{ type: 'addBot', user: 'p1', count: 8 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+    const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
+    expect(day.state.phase).toBe('speech');
+    expect(announces(day.events).some((t) => t.includes('翻牌'))).toBe(false);
+  });
+});

@@ -76,6 +76,7 @@ export interface GameState {
   potions: { antidote: boolean; poison: boolean };
   lastDeaths: string[]; // 上一次夜晚結算死亡的玩家
   winner?: 'good' | 'wolves'; // 分出勝負後才有；取消的遊戲沒有
+  knightUsed: boolean; // 騎士是否已經決鬥過
   speakers: string[]; // 還沒輪到的發言者
   speaker?: string; // 目前的發言者（輪流發言或遺言）
   lastWords: string[]; // 還沒講遺言的死者
@@ -103,6 +104,7 @@ export type Action =
   | { type: 'skipSpeaker'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'hunterShoot'; user: string; target: string } // target 是玩家 id 或 'none'
+  | { type: 'duel'; user: string; target: string }
   | { type: 'timeout'; id: number };
 
 export interface Option {
@@ -433,7 +435,41 @@ function startSpeeches(c: Ctx) {
   s.phase = 'speech';
   s.speakers = [...living.slice(first), ...living.slice(0, first)];
   c.events.push({ type: 'announce', text: `💬 開始輪流發言，順序：${s.speakers.map(mention).join(' → ')}` });
+  promptKnight(c);
   nextSpeaker(c);
+}
+
+// 騎士還活著、還沒決鬥過時，私訊決鬥按鈕
+function promptKnight(c: Ctx) {
+  const s = c.s;
+  const knight = aliveWith(s, 'knight')[0];
+  if (!knight || s.knightUsed) return;
+  c.events.push({
+    type: 'prompt',
+    kind: 'duel',
+    audience: 'user',
+    user: knight.id,
+    text: '🗡️ 你可以在輪流發言或自由討論時翻牌決鬥（整局一次）。選擇決鬥對象：',
+    options: options(alive(s).filter((p) => p.id !== knight.id).map((p) => p.id)),
+  });
+}
+
+function duel(c: Ctx, knight: string, target: string) {
+  const s = c.s;
+  s.knightUsed = true;
+  c.events.push({ type: 'announce', text: `🗡️ 騎士 ${mention(knight)} 翻牌，向 ${mention(target)} 發起決鬥！` });
+  if (player(s, target).role === 'werewolf') {
+    player(s, target).alive = false;
+    c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。` });
+    if (checkGameOver(c)) return;
+    enterNight(c);
+    return;
+  }
+  player(s, knight).alive = false;
+  c.events.push({ type: 'announce', text: `${mention(target)} 是好人，騎士 ${mention(knight)} 出局。` });
+  if (checkGameOver(c)) return;
+  s.speakers = s.speakers.filter((id) => id !== knight);
+  if (s.phase === 'speech' && s.speaker === knight) nextSpeaker(c);
 }
 
 // 換下一位發言者；bot 直接過，沒有人了就進入下一個階段
@@ -561,7 +597,7 @@ const reply = (c: Ctx, to: string, text: string) => {
 type GameAction = Exclude<Action, { type: 'new' } | { type: 'rematch' }>;
 
 // 只有這局的玩家才能做的操作（遊戲按鈕）
-const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote'];
+const PLAYER_ACTIONS: GameAction['type'][] = ['wolfVote', 'seerCheck', 'witchAct', 'hunterShoot', 'endSpeech', 'dayVote', 'duel'];
 
 // 回傳 true 代表 state 有變動
 function handle(c: Ctx, action: GameAction): boolean {
@@ -683,6 +719,13 @@ function handle(c: Ctx, action: GameAction): boolean {
       startVote(c);
       return true;
     }
+    case 'duel': {
+      if (!aliveWith(s, 'knight').some((p) => p.id === action.user) || s.knightUsed) return false;
+      if (s.phase !== 'speech' && s.phase !== 'discussion') return reply(c, action.user, '現在不能決鬥。');
+      if (action.target === action.user || !isAlive(s, action.target)) return false;
+      duel(c, action.user, action.target);
+      return true;
+    }
     case 'endSpeech': {
       if (!isSpeaking(s)) return false;
       if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
@@ -796,6 +839,7 @@ function createLobby(prev: GameState | undefined, host: string, channel: string)
     lastDeaths: [],
     speakers: [],
     lastWords: [],
+    knightUsed: false,
     votes: {},
     candidates: [],
     voters: [],
