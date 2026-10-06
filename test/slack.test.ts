@@ -187,3 +187,53 @@ describe('Slack：遊戲按鈕與計時', () => {
     expect(postsTo(calls, 'D:U1,U2').map((c) => c.args.text)).toContainEqual(expect.stringContaining('沒有擊殺目標'));
   });
 });
+
+describe('Slack：bot 玩家', () => {
+  it('parseCommand 支援 addbot、removebot 和數量', () => {
+    expect(parseCommand('addbot', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 1 });
+    expect(parseCommand('addbot 5', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 5 });
+    expect(parseCommand('removebot  2', 'U1', 'C1')).toEqual({ type: 'removeBot', user: 'U1', count: 2 });
+    expect(parseCommand('addbot 0', 'U1', 'C1')).toBeNull();
+    expect(parseCommand('addbot abc', 'U1', 'C1')).toBeNull();
+  });
+
+  // rng 固定時：U1 狼人、bot:1 狼人、bot:2 預言家、bot:3 女巫、bot:4、bot:5 村民
+  async function botGame(rng?: () => number) {
+    const { client, calls } = fakeClient();
+    const host = new GameHost(client, { rng: rng ?? (() => 0.99999), setTimer: () => {} });
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.command('C1', 'U1', 'alice', 'addbot 5');
+    await host.command('C1', 'U1', 'alice', 'start');
+    return { host, calls };
+  }
+
+  it('不私訊 bot，也不把提示送給 bot', async () => {
+    const { calls } = await botGame();
+    const opened = calls.filter((c) => c.method === 'conversations.open').map((c) => c.args.users);
+    expect(opened.some((u: string) => u.includes('bot:'))).toBe(false);
+    expect(calls.some((c) => String(c.args.channel).includes('bot:'))).toBe(false);
+    expect(calls.some((c) => c.method === 'chat.postEphemeral' && String(c.args.user).includes('bot:'))).toBe(false);
+  });
+
+  it('狼人有真人也有 bot：私密對話只拉真人，名單列出 bot', async () => {
+    const { calls } = await botGame();
+    expect(calls).toContainEqual({ method: 'conversations.open', args: { users: 'U1' } });
+    const wolfPosts = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1');
+    expect(wolfPosts.map((c) => c.args.text).join('\n')).toContain('🤖Bot1');
+  });
+
+  it('狼人全部都是 bot 時，不建立狼人的私密對話', async () => {
+    // 第一次交換把 U1 換成村民，之後不再交換：狼人是 bot:1 和 bot:5
+    const seq = [0, 0.99999, 0.99999, 0.99999, 0.99999];
+    const { host, calls } = await botGame(() => seq.shift() ?? 0.99999);
+    expect(host.games.get('C1')!.players.find((p) => p.id === 'U1')!.role).toBe('villager');
+    const wolfOpens = calls.filter((c) => c.method === 'conversations.open' && c.args.users !== 'U1');
+    expect(wolfOpens).toEqual([]);
+  });
+
+  it('按鈕上的 bot 顯示成 🤖Bot<編號>', async () => {
+    const { calls } = await botGame();
+    const wolfPrompt = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1').find((c) => buttonsOf(c).length)!;
+    expect(buttonsOf(wolfPrompt).map((b: any) => b.text.text)).toContain('🤖Bot2');
+  });
+});

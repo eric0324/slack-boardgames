@@ -1,5 +1,5 @@
 // Slack adapter：把 slash command 和按鈕轉成 engine action，再把 engine event 轉成 Slack API 呼叫。
-import { applyAction, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type Rng } from './engine.js';
+import { applyAction, isBot, MAX_PLAYERS, mention, type Action, type GameEvent, type GameState, type Rng } from './engine.js';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -18,9 +18,15 @@ export interface HostOptions {
   setTimer?: (fn: () => void, ms: number) => void;
 }
 
-const HELP = '用法：`/werewolf new` 開房、`/werewolf start` 開始、`/werewolf vote` 結束討論進入投票、`/werewolf cancel` 取消遊戲';
+const HELP = '用法：`/werewolf new` 開房、`/werewolf addbot [數量]`／`/werewolf removebot [數量]` 加入或移除 bot、`/werewolf start` 開始、`/werewolf vote` 結束討論進入投票、`/werewolf cancel` 取消遊戲';
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {
+  const [sub, arg, ...rest] = text.trim().split(/\s+/);
+  if (sub === 'addbot' || sub === 'removebot') {
+    const count = arg === undefined ? 1 : Number(arg);
+    if (rest.length || !Number.isInteger(count) || count < 1) return null;
+    return { type: sub === 'addbot' ? 'addBot' : 'removeBot', user, count };
+  }
   switch (text.trim()) {
     case 'new':
       return { type: 'new', user, channel };
@@ -127,8 +133,13 @@ export class GameHost {
     return id;
   }
 
-  private async wolfChat(channel: string, wolves: string[]): Promise<string> {
-    const users = wolves.join(',');
+  // 只拉真人狼人；狼人全是 bot 時回傳 null
+  private async wolfChat(channel: string, wolves: string[]): Promise<string | null> {
+    const users = wolves.filter((w) => !isBot(w)).join(',');
+    if (!users) {
+      this.wolfChats.delete(channel);
+      return null;
+    }
     const cached = this.wolfChats.get(channel);
     if (cached?.users === users) return cached.id;
     const id = (await this.client.conversations.open({ users })).channel.id as string;
@@ -140,7 +151,7 @@ export class GameHost {
   private label(text: string) {
     return text
       .split(' ')
-      .map((t) => this.names.get(t) ?? t)
+      .map((t) => this.names.get(t) ?? (isBot(t) ? mention(t) : t))
       .join(' ');
   }
 
@@ -151,14 +162,19 @@ export class GameHost {
         this.setTimer(() => void this.dispatch(channel, { type: 'timeout', id: e.id }), e.ms);
         return;
       case 'dm':
+        if (isBot(e.to)) return;
         await chat.postMessage({ channel: await this.dm(e.to), text: e.text });
         return;
-      case 'wolfChat':
-        await chat.postMessage({ channel: await this.wolfChat(channel, e.wolves), text: e.text });
+      case 'wolfChat': {
+        const id = await this.wolfChat(channel, e.wolves);
+        if (id) await chat.postMessage({ channel: id, text: e.text });
         return;
+      }
       case 'prompt': {
+        if (e.audience === 'user' && isBot(e.user!)) return;
         const target =
-          e.audience === 'channel' ? channel : e.audience === 'wolves' ? this.wolfChats.get(channel)!.id : await this.dm(e.user!);
+          e.audience === 'channel' ? channel : e.audience === 'wolves' ? this.wolfChats.get(channel)?.id : await this.dm(e.user!);
+        if (!target) return;
         const elements = e.options.map((o, i) => button(e.kind, i, this.label(o.label), channel, o.value));
         const blocks = [
           { type: 'section', text: { type: 'mrkdwn', text: e.text } },
@@ -171,6 +187,7 @@ export class GameHost {
         await chat.postMessage({ channel, text: e.text });
         return;
       case 'ephemeral':
+        if (isBot(e.to)) return;
         await chat.postEphemeral({ channel, user: e.to, text: e.text });
         return;
       case 'lobby': {

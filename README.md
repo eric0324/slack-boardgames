@@ -18,7 +18,7 @@
      slash_commands:
        - command: /werewolf
          description: 狼人殺
-         usage_hint: new | start | vote | cancel
+         usage_hint: new | addbot [n] | removebot [n] | start | vote | cancel
          should_escape: false
    oauth_config:
      scopes:
@@ -54,11 +54,12 @@ npm test       # 執行測試
 
 1. 先把 bot 邀請進要玩的頻道：`/invite @werewolf`（bot 不在頻道裡就無法發訊息）
 2. `/werewolf new`：開房，按「加入」參加
-3. `/werewolf start`：房主開始遊戲（6～12 人）
-4. 每個人會收到 bot 的私訊，告訴你自己的身分；狼人會被拉進同一個多人私訊
-5. 夜晚在私訊裡按按鈕行動，白天在頻道裡討論、按按鈕投票
-6. `/werewolf vote`：房主提前結束討論，直接進入投票
-7. `/werewolf cancel`：房主取消遊戲
+3. 人不夠的話，房主可以用 `/werewolf addbot [數量]` 加入 bot 補人數，用 `/werewolf removebot [數量]` 移除。bot 會顯示成 🤖Bot1、🤖Bot2……，輪到它時會隨機、立刻行動，一個人也能測試整局
+4. `/werewolf start`：房主開始遊戲（6～12 人，bot 也算在內）
+5. 每個人會收到 bot 的私訊，告訴你自己的身分；狼人會被拉進同一個多人私訊
+6. 夜晚在私訊裡按按鈕行動，白天在頻道裡討論、按按鈕投票
+7. `/werewolf vote`：房主提前結束討論，直接進入投票
+8. `/werewolf cancel`：房主取消遊戲
 
 ## 架構
 
