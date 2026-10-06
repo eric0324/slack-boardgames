@@ -213,7 +213,8 @@ describe('night-phase: 夜晚流程與時限', () => {
     expect(events).toContainEqual({ type: 'announce', text: expect.stringContaining('第 1 夜'), gif: 'night' });
     const [wolf] = prompts(events, 'wolfKill');
     expect(wolf.audience).toBe('wolves');
-    expect(wolf.options).toHaveLength(8);
+    expect(wolf.options).toHaveLength(9);
+    expect(wolf.options.at(-1)).toEqual({ value: 'none', label: '不殺人' });
     const [seer] = prompts(events, 'seerCheck');
     expect(seer).toMatchObject({ audience: 'user', user: 'p4' });
     expect(seer.options.map((o) => o.value)).not.toContain('p4');
@@ -1237,5 +1238,38 @@ describe('day-phase: 遺言', () => {
     const { state } = withBots();
     const day = run([{ type: 'wolfVote', user: 'p1', target: state.night!.wolfVotes['bot:1'] }], state);
     expect(announces(day.events)).toContainEqual(expect.stringMatching(/^🤖Bot\d：（沒有遺言）$/));
+  });
+});
+
+describe('night-phase: 狼人選擇不殺人', () => {
+  it('狼人都選不殺人：沒有擊殺目標，公布今晚不殺人，女巫收到沒有人被殺', () => {
+    const { state, events } = run(
+      ['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: 'none' }) as Action),
+      started(8).state,
+    );
+    expect(state.night!.wolfTarget).toBeNull();
+    expect(wolfChatText(events)).toContain('<@p3> 選擇不殺人。');
+    expect(wolfChatText(events)).toContain('今晚不殺人');
+    expect(witchPrompt(events).text).toContain('今晚沒有人被殺');
+  });
+
+  it('不殺人得票最多：沒有擊殺目標', () => {
+    const { state } = run(
+      [
+        { type: 'wolfVote', user: 'p1', target: 'none' },
+        { type: 'wolfVote', user: 'p2', target: 'none' },
+        { type: 'wolfVote', user: 'p3', target: 'p7' },
+      ],
+      started(8).state,
+    );
+    expect(state.night!.wolfTarget).toBeNull();
+  });
+
+  it('不殺人和玩家同票時隨機', () => {
+    const s = run([{ type: 'wolfVote', user: 'p1', target: 'none' }], started(6).state).state;
+    const last: Action = { type: 'wolfVote', user: 'p2', target: 'p6' };
+    const a = applyAction(s, last, () => 0).state.night!.wolfTarget;
+    const b = applyAction(s, last, () => 0.99999).state.night!.wolfTarget;
+    expect(new Set([a, b])).toEqual(new Set([null, 'p6']));
   });
 });

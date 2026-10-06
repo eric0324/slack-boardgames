@@ -89,7 +89,7 @@ export type Action =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
-  | { type: 'wolfVote'; user: string; target: string }
+  | { type: 'wolfVote'; user: string; target: string } // target 是玩家 id 或 'none'（不殺人）
   | { type: 'seerCheck'; user: string; target: string }
   | { type: 'witchAct'; user: string; choice: string } // 'save' | 'skip' | 'poison:<id>'
   | { type: 'endDiscussion'; user: string }
@@ -215,7 +215,13 @@ function enterNight(c: Ctx) {
   const living = alive(s).map((p) => p.id);
   c.events.push(
     { type: 'announce', text: `🌙 第 ${s.day} 夜，天黑請閉眼。`, gif: 'night' },
-    { type: 'prompt', kind: 'wolfKill', audience: 'wolves', text: '請選擇今晚要擊殺的玩家。', options: options(living) },
+    {
+      type: 'prompt',
+      kind: 'wolfKill',
+      audience: 'wolves',
+      text: '請選擇今晚要擊殺的玩家。',
+      options: [...options(living), { value: 'none', label: '不殺人' }],
+    },
   );
   if (seer) {
     c.events.push({
@@ -233,8 +239,10 @@ function enterNight(c: Ctx) {
 function decideWolves(c: Ctx) {
   const n = c.s.night!;
   const top = mostVoted(Object.values(n.wolfVotes));
-  n.wolfTarget = top.length ? top[Math.floor(c.rng() * top.length)] : null;
-  const text = n.wolfTarget ? `今晚的目標是 ${mention(n.wolfTarget)}。` : '今晚沒有擊殺目標。';
+  const choice = top.length ? top[Math.floor(c.rng() * top.length)] : null;
+  n.wolfTarget = choice === 'none' ? null : choice;
+  const text =
+    choice === 'none' ? '今晚不殺人。' : n.wolfTarget ? `今晚的目標是 ${mention(n.wolfTarget)}。` : '今晚沒有擊殺目標。';
   c.events.push({ type: 'wolfChat', wolves: wolfIds(c.s), text });
   startTimer(c, 'witch', ACTION_MS);
   promptWitch(c);
@@ -601,9 +609,13 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'wolfVote': {
       const n = s.night;
       if (s.phase !== 'night' || !n || n.wolfTarget !== undefined) return false;
-      if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user) || !isAlive(s, action.target)) return false;
+      if (!aliveWith(s, 'werewolf').some((p) => p.id === action.user)) return false;
+      if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       n.wolfVotes[action.user] = action.target;
-      const picked = `${mention(action.user)} 選擇擊殺 ${mention(action.target)}。`;
+      const picked =
+        action.target === 'none'
+          ? `${mention(action.user)} 選擇不殺人。`
+          : `${mention(action.user)} 選擇擊殺 ${mention(action.target)}。`;
       c.events.push({ type: 'wolfChat', wolves: wolfIds(s), text: picked });
       if (aliveWith(s, 'werewolf').every((w) => n.wolfVotes[w.id])) decideWolves(c);
       return true;
