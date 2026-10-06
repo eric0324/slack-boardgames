@@ -148,6 +148,12 @@ export class GameHost {
     return this.deliver(channel, [{ type: 'ephemeral', to: user, text }]);
   }
 
+  // 頻道裡的一般訊息：只在有遊戲進行時交給 engine，engine 只讀不回應
+  chat(channel: string, user: string, text: string): Promise<void> {
+    if (!this.games.has(channel)) return Promise.resolve();
+    return this.dispatch(channel, { type: 'chat', user, text });
+  }
+
   dispatch(channel: string, action: Action): Promise<void> {
     const { state, events } = applyAction(this.games.get(channel), action, this.rng);
     if (state) this.games.set(channel, state);

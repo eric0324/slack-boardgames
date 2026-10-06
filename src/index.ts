@@ -26,5 +26,11 @@ app.action<BlockAction<ButtonAction>>(/^ww:/, async ({ action, body, ack }) => {
   await host.button(action.action_id, action.value ?? '', body.user.id, body.user.username);
 });
 
+// 頻道裡真人打的字（忽略 bot 的訊息、編輯和其他子類型）
+app.message(async ({ message }) => {
+  if (message.subtype !== undefined || 'bot_id' in message) return;
+  await host.chat(message.channel, message.user, message.text ?? '');
+});
+
 await app.start();
 console.log('[werewolf] Bot is running (Socket Mode)');

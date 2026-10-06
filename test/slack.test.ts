@@ -438,3 +438,33 @@ describe('Slack：開始遊戲按鈕', () => {
     expect(host.games.get('C1')!.phase).toBe('night');
   });
 });
+
+describe('Slack：讀取頻道訊息', () => {
+  it('頻道訊息轉成 chat action，不會產生任何 Slack 呼叫', async () => {
+    const { host, calls } = setup();
+    await host.command('C1', 'U1', 'alice', 'new');
+    for (const u of ['U2', 'U3', 'U4', 'U5', 'U6']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.command('C1', 'U1', 'alice', 'start');
+    // 第一夜：U1、U2 狼人刀 U5，U3 預言家查 U1，U4 女巫不用藥 → 天亮後 U5 的遺言
+    for (const a of [
+      { type: 'wolfVote', user: 'U1', target: 'U5' },
+      { type: 'wolfVote', user: 'U2', target: 'U5' },
+      { type: 'seerCheck', user: 'U3', target: 'U1' },
+      { type: 'witchAct', user: 'U4', choice: 'skip' },
+      { type: 'skipSpeaker', user: 'U1' },
+    ] as const) {
+      await host.dispatch('C1', a);
+    }
+    const before = calls.length;
+    await host.chat('C1', 'U3', '我是預言家，查殺 <@U1>');
+    expect(calls.length).toBe(before);
+    expect(host.games.get('C1')!.claims).toContainEqual({ by: 'U3', night: 1, target: 'U1', wolf: true });
+  });
+
+  it('沒有遊戲的頻道直接忽略', async () => {
+    const { host, calls } = setup();
+    await host.chat('C9', 'U1', '我是預言家');
+    expect(calls).toEqual([]);
+    expect(host.games.has('C9')).toBe(false);
+  });
+});
