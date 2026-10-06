@@ -1088,6 +1088,20 @@ describe('bot-players: 整局測試', () => {
   // 簡單的 LCG，讓每個種子的結果都固定
   const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
 
+  it('1 位真人 + 11 個 bot（有騎士、狼王），遊戲一定會跑到結束', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = seeded(seed);
+      let s = applyAction(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyAction(s, { type: 'addBot', user: 'p1', count: 11 }, r).state;
+      s = applyAction(s, { type: 'start', user: 'p1' }, r).state;
+      for (let step = 0; step < 500 && s.phase !== 'ended'; step++) {
+        const id = Object.values(s.timers)[0];
+        s = applyAction(s, { type: 'timeout', id: id! }, r).state;
+      }
+      expect(s.phase, `seed ${seed}`).toBe('ended');
+    }
+  });
+
   it('1 位真人 + 5 個 bot，真人什麼都不做，遊戲一定會跑到結束', () => {
     for (let seed = 1; seed <= 20; seed++) {
       const r = seeded(seed);
@@ -1500,5 +1514,75 @@ describe('role-assignment: 狼王', () => {
   it('勝負判定時狼王算狼人', () => {
     expect(checkWinner(table('wwGSIHKVV'))).toBeNull();
     expect(checkWinner(table('wwgSIHKVV'))).toBe('good');
+  });
+});
+
+// 10 人局第一夜：狼人刀 kill、預言家查 p1、女巫 witch，遺言跳過
+const night10 = (kill: string, witch: string) =>
+  run(
+    [
+      ...['p1', 'p2', 'p3'].map((user) => ({ type: 'wolfVote', user, target: kill }) as Action),
+      { type: 'seerCheck', user: 'p4', target: 'p1' },
+      { type: 'witchAct', user: 'p5', choice: witch },
+    ],
+    started(10).state,
+  );
+// 第一夜 p8 死亡後進入白天，房主直接進入投票，p3（狼王）被放逐並講完遺言
+const kingExiled = () => {
+  const vote = run([{ type: 'endDiscussion', user: 'p1' }], skipLastWords(night10('p8', 'skip')).state).state;
+  const exiled = run(
+    votes([['p4', 'p3'], ['p5', 'p3'], ['p6', 'p3'], ['p7', 'p3'], ['p9', 'p3'], ['p1', 'abstain'], ['p2', 'abstain'], ['p3', 'abstain'], ['p10', 'abstain']]),
+    vote,
+  ).state;
+  return run([{ type: 'endSpeech', user: 'p3' }], exiled);
+};
+
+describe('day-phase: 狼王開槍', () => {
+  it('狼王被放逐，講完遺言後開槍，判斷勝負後進入夜晚', () => {
+    const { state, events } = kingExiled();
+    expect(prompts(events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const shot = run([{ type: 'hunterShoot', user: 'p3', target: 'p9' }], state);
+    expect(announces(shot.events)).toContainEqual(expect.stringContaining('🔫 狼王 <@p3> 開槍帶走了 <@p9>'));
+    expect(isDead(shot.state, 'p9')).toBe(true);
+    expect(shot.state).toMatchObject({ phase: 'night', day: 2 });
+  });
+
+  it('被毒死的狼王不能開槍', () => {
+    const { state, events } = skipLastWords(night10('p8', 'poison:p3'));
+    expect(isDead(state, 'p3')).toBe(true);
+    expect(prompts(events, 'hunterShoot')).toEqual([]);
+    expect(state.phase).toBe('speech');
+  });
+
+  it('被狼人刀死的狼王可以開槍', () => {
+    const { events } = skipLastWords(night10('p3', 'skip'));
+    expect(prompts(events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+  });
+
+  it('獵人帶走狼王，狼王再開槍', () => {
+    const hunter = skipLastWords(night10('p6', 'skip'));
+    expect(prompts(hunter.events, 'hunterShoot')[0]).toMatchObject({ user: 'p6' });
+    const king = run([{ type: 'hunterShoot', user: 'p6', target: 'p3' }], hunter.state);
+    expect(prompts(king.events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const done = run([{ type: 'hunterShoot', user: 'p3', target: 'p9' }], king.state);
+    expect(isDead(done.state, 'p9')).toBe(true);
+    expect(done.state.phase).toBe('speech');
+  });
+
+  it('狼王開槍帶走獵人，獵人不能開槍', () => {
+    const shot = run([{ type: 'hunterShoot', user: 'p3', target: 'p6' }], kingExiled().state);
+    expect(isDead(shot.state, 'p6')).toBe(true);
+    expect(prompts(shot.events, 'hunterShoot')).toEqual([]);
+    expect(shot.state.phase).toBe('night');
+  });
+
+  it('騎士決鬥到狼王：狼王沒有遺言，開槍處理完後直接進入夜晚', () => {
+    const day = skipLastWords(night10('p8', 'skip')).state;
+    const dueled = run([{ type: 'duel', user: 'p7', target: 'p3' }], day);
+    expect(isDead(dueled.state, 'p3')).toBe(true);
+    expect(prompts(dueled.events, 'endSpeech').some((p) => p.text.includes('遺言'))).toBe(false);
+    expect(prompts(dueled.events, 'hunterShoot')[0]).toMatchObject({ user: 'p3' });
+    const done = run([{ type: 'hunterShoot', user: 'p3', target: 'none' }], dueled.state);
+    expect(done.state).toMatchObject({ phase: 'night', day: 2 });
   });
 });

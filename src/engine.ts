@@ -86,7 +86,7 @@ export interface GameState {
   votes: Record<string, string>; // 投票者 → 目標 id 或 'abstain'
   candidates: string[]; // 這輪可以被投的人
   voters: string[]; // 這輪可以投票的人
-  hunter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人
+  shooter?: { id: string; next: 'speech' | 'night' }; // 正在等待開槍的獵人或狼王
 }
 
 export type Action =
@@ -326,9 +326,9 @@ function nextBotAction(s: GameState, rng: Rng): GameAction | null {
       return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
     }
   }
-  if (s.phase === 'hunter' && s.hunter && isBot(s.hunter.id)) {
+  if (s.phase === 'hunter' && s.shooter && isBot(s.shooter.id)) {
     const targets = [...alive(s).map((p) => p.id), 'none'];
-    return { type: 'hunterShoot', user: s.hunter.id, target: pick(targets, rng) };
+    return { type: 'hunterShoot', user: s.shooter.id, target: pick(targets, rng) };
   }
   return null;
 }
@@ -396,22 +396,31 @@ function nextLastWords(c: Ctx) {
   const after = s.afterLastWords!;
   s.afterLastWords = undefined;
   if (after.kind === 'exile') {
-    if (player(s, after.id).role === 'hunter') startHunter(c, after.id, 'night');
+    if (canShoot(s, after.id, 'exile')) startShooter(c, after.id, 'night');
     else enterNight(c);
     return;
   }
   const n = s.night!;
   const shotByWolves = n.wolfTarget && !n.saved && n.poisoned !== n.wolfTarget ? n.wolfTarget : null;
-  const hunter = c.s.players.find((p) => p.id === shotByWolves && p.role === 'hunter');
-  if (hunter) startHunter(c, hunter.id, 'speech');
+  if (shotByWolves && canShoot(s, shotByWolves, 'wolf')) startShooter(c, shotByWolves, 'speech');
   else startSpeeches(c);
 }
 
-function startHunter(c: Ctx, id: string, next: 'speech' | 'night') {
+type DeathCause = 'wolf' | 'poison' | 'exile' | 'shot' | 'duel';
+
+// 獵人：被狼人刀死或被放逐才能開槍；狼王：除了被毒死都可以
+function canShoot(s: GameState, id: string, cause: DeathCause): boolean {
+  const role = player(s, id).role;
+  if (role === 'hunter') return cause === 'wolf' || cause === 'exile';
+  if (role === 'wolfKing') return cause !== 'poison';
+  return false;
+}
+
+function startShooter(c: Ctx, id: string, next: 'speech' | 'night') {
   const s = c.s;
   s.phase = 'hunter';
   s.timers = {};
-  s.hunter = { id, next };
+  s.shooter = { id, next };
   c.events.push({
     type: 'prompt',
     kind: 'hunterShoot',
@@ -423,14 +432,20 @@ function startHunter(c: Ctx, id: string, next: 'speech' | 'night') {
   startTimer(c, 'phase', ACTION_MS);
 }
 
-function finishHunter(c: Ctx, target: string) {
+function finishShooter(c: Ctx, target: string) {
   const s = c.s;
-  const { id, next } = s.hunter!;
-  s.hunter = undefined;
+  const { id, next } = s.shooter!;
+  s.shooter = undefined;
   if (target !== 'none') {
     player(s, target).alive = false;
-    c.events.push({ type: 'announce', text: `🔫 獵人 ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
+    const who = ROLE_NAME[player(s, id).role!];
+    c.events.push({ type: 'announce', text: `🔫 ${who} ${mention(id)} 開槍帶走了 ${mention(target)}。`, gif: 'hunterShot' });
     if (checkGameOver(c)) return;
+    // 被帶走的人如果是狼王，輪到他開槍（連鎖）
+    if (canShoot(s, target, 'shot')) {
+      startShooter(c, target, next);
+      return;
+    }
   }
   if (next === 'speech') startSpeeches(c);
   else enterNight(c);
@@ -471,7 +486,8 @@ function duel(c: Ctx, knight: string, target: string) {
     player(s, target).alive = false;
     c.events.push({ type: 'announce', text: `${mention(target)} 是狼人，出局！直接進入黑夜。` });
     if (checkGameOver(c)) return;
-    enterNight(c);
+    if (canShoot(s, target, 'duel')) startShooter(c, target, 'night');
+    else enterNight(c);
     return;
   }
   player(s, knight).alive = false;
@@ -761,10 +777,10 @@ function handle(c: Ctx, action: GameAction): boolean {
       return true;
     }
     case 'hunterShoot': {
-      if (s.phase !== 'hunter' || action.user !== s.hunter?.id) return false;
+      if (s.phase !== 'hunter' || action.user !== s.shooter?.id) return false;
       if (action.target !== 'none' && !isAlive(s, action.target)) return false;
       if (action.target === 'none') c.events.push({ type: 'dm', to: action.user, text: '你選擇不開槍。' });
-      finishHunter(c, action.target);
+      finishShooter(c, action.target);
       return true;
     }
     case 'timeout': {
@@ -802,7 +818,7 @@ function handle(c: Ctx, action: GameAction): boolean {
         return true;
       }
       if (action.id === s.timers.phase && s.phase === 'hunter') {
-        finishHunter(c, 'none');
+        finishShooter(c, 'none');
         return true;
       }
       return false;
