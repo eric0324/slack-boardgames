@@ -1725,3 +1725,19 @@ describe('announcement-gifs: 決鬥、PK、狼王開槍的 GIF', () => {
     expect(announceWith(hunter.events, '獵人')).toMatchObject({ gif: 'hunterShot' });
   });
 });
+
+describe('bot-players: 台詞有足夠的變化', () => {
+  it('連續產生 500 句輪流發言，不重複的超過 400 句', () => {
+    let x = 42;
+    const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const lines = Array.from({ length: 500 }, () => botLine('speech', '@C', r));
+    expect(new Set(lines).size).toBeGreaterThan(400);
+  });
+
+  it('遺言和 PK 也有變化', () => {
+    let x = 7;
+    const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    expect(new Set(Array.from({ length: 200 }, () => botLine('lastWords', '@C', r))).size).toBeGreaterThan(50);
+    expect(new Set(Array.from({ length: 200 }, () => botLine('pk', '@C', r))).size).toBeGreaterThan(50);
+  });
+});
