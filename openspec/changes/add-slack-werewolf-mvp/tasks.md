@@ -120,3 +120,8 @@
 ## 23. 條列式使用說明
 
 - [x] 23.1 Slack adapter 的使用說明改成條列式（每個指令一行，含誰可以用和說明，最後附 wiki 指令頁連結），`/werewolf help`、空白和不認識的子指令都回覆；確認 game-lobby「使用說明」的 scenarios 測試通過
+
+## 24. 更多公告 GIF
+
+- [x] 24.1 Engine：騎士決鬥結果（成功／失敗）、平票 PK、狼王開槍的公告加上對應的 `gif` key；確認 announcement-gifs 新增的 scenarios 測試通過
+- [x] 24.2 從 Giphy 挑選這四個時刻的 GIF，並把所有時刻擴充到每個至少 6 張，確認網址讀得到、檔案不超過 2.5MB、內容合適，加進 `src/gifs.ts`；確認預設設定檔每個時刻至少 6 張且不重複的測試通過
