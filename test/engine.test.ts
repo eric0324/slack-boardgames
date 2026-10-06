@@ -1036,7 +1036,7 @@ describe('bot-players: 加入與移除 bot', () => {
 
 describe('bot-players: bot 的顯示方式', () => {
   it('bot 顯示成 🤖<名字>，真人還是 <@id>', () => {
-    expect(mention('bot:1:漆黑的墮天使')).toBe('🤖漆黑的墮天使');
+    expect(mention('bot:1:Sam')).toBe('🤖Sam');
     expect(mention('U123')).toBe('<@U123>');
     expect(isBot('bot:3')).toBe(true);
     expect(isBot('U123')).toBe(false);
@@ -1760,25 +1760,23 @@ describe('bot-players: bot 的顯示方式（隨機名字）', () => {
     expect(new Set(names).size).toBe(11);
   });
 
-  it('名字不含角色相關的字、空白和冒號', () => {
+  it('名字是簡單的英文名字', () => {
     for (let seed = 1; seed <= 300; seed++) {
       let x = seed;
       const r = () => ((x = (x * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
-      const name = randomBotName(r, new Set());
-      expect(name).not.toMatch(/狼|預言|女巫|獵|騎士|村民|\s|:/);
+      expect(randomBotName(r, new Set())).toMatch(/^[A-Z][a-z]+$/);
     }
   });
 
-  it('名字有足夠的變化', () => {
-    // 用 mulberry32：簡單的 LCG 連續兩次輸出有相關性，抽「形容詞 + 名詞」時會不夠分散
-    let a = 9;
-    const r = () => {
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-    const names = new Set(Array.from({ length: 300 }, () => randomBotName(r, new Set())));
-    expect(names.size).toBeGreaterThan(150);
+  it('名字庫至少 30 個名字', () => {
+    const all = new Set<string>();
+    for (let i = 0; i < 60; i++) all.add(randomBotName(() => i / 60, new Set()));
+    expect(all.size).toBeGreaterThanOrEqual(30);
+  });
+
+  it('已經用過的名字不會再抽到', () => {
+    const taken = new Set<string>();
+    for (let i = 0; i < 30; i++) taken.add(randomBotName(() => 0, taken));
+    expect(taken.size).toBe(30);
   });
 });
