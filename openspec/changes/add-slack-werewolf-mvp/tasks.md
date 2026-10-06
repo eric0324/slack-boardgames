@@ -108,6 +108,6 @@
 
 ## 21. 戰績查詢
 
-- [ ] 21.1 Engine：遊戲分出勝負時送出 `gameRecord` event（頻道、獲勝陣營、每位玩家的角色），有 bot 或取消的遊戲不送；確認 player-stats「記錄遊戲結果」中 engine 相關的 scenarios 測試通過
+- [x] 21.1 Engine：遊戲分出勝負時送出 `gameRecord` event（頻道、獲勝陣營、每位玩家的角色），有 bot 或取消的遊戲不送；確認 player-stats「記錄遊戲結果」中 engine 相關的 scenarios 測試通過
 - [ ] 21.2 新增 `src/stats.ts`：用 better-sqlite3 把紀錄存在 SQLite（預設 `data/stats.db`，games 和 game_players 兩張表）、依頻道和玩家計算總計／陣營／角色的場數與勝率，並格式化成查詢結果；確認「查詢戰績」的 scenarios 和「bot 重新啟動後戰績還在」測試通過
 - [ ] 21.3 Slack adapter 支援 `/werewolf stats [@某人]`（解析使用者 mention），收到 `gameRecord` 時存檔；manifest 的 slash command 改成 `should_escape: true` 以取得使用者 id；更新 README、wiki 指令頁；用假的 Slack client 確認查詢流程

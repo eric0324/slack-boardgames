@@ -121,7 +121,8 @@ export type GameEvent =
   | { type: 'wolfChat'; wolves: string[]; text: string }
   | { type: 'lobby'; host: string; players: string[]; open: boolean }
   | { type: 'prompt'; kind: string; audience: 'channel' | 'wolves' | 'user'; user?: string; text: string; options: Option[] }
-  | { type: 'startTimer'; id: number; ms: number };
+  | { type: 'startTimer'; id: number; ms: number }
+  | { type: 'gameRecord'; winner: 'good' | 'wolves'; players: { id: string; role: Role }[] };
 
 export type Rng = () => number;
 
@@ -598,6 +599,10 @@ function checkGameOver(c: Ctx): boolean {
     .join('\n');
   const title = winner === 'good' ? '🎉 遊戲結束，好人陣營獲勝！' : '🐺 遊戲結束，狼人陣營獲勝！';
   c.s.winner = winner;
+  // 只記錄全真人的遊戲（戰績查詢用）
+  if (!c.s.players.some((p) => isBot(p.id))) {
+    c.events.push({ type: 'gameRecord', winner, players: c.s.players.map((p) => ({ id: p.id, role: p.role! })) });
+  }
   c.events.push(
     { type: 'announce', text: `${title}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' },
     {
