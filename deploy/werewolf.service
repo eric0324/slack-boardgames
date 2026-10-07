@@ -1,0 +1,15 @@
+[Unit]
+Description=Slack werewolf bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=werewolf
+WorkingDirectory=/opt/werewolf/app
+ExecStart=/usr/bin/npm start
+# 當掉或主機重開機都會自動重啟
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
