@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mention, type GameEvent } from '../src/engine.js';
-import { applyUndercover, UNDERCOVER_TABLE, type UAction, type UState } from '../src/undercover.js';
+import { applyUndercover, checkUndercoverWinner, UNDERCOVER_TABLE, type UAction, type UState } from '../src/undercover.js';
 import { BLANK_LINES, WORD_PAIRS } from '../src/undercoverWords.js';
 
 const rng = () => 0.99999;
@@ -316,11 +316,25 @@ describe('undercover/win-condition: 勝負判定', () => {
     expect(state).toMatchObject({ phase: 'ended', winner: 'civilian' });
   });
 
-  it('臥底和白板都出局：平民獲勝（白板猜錯之後判定）', () => {
-    const afterUndercover = exile6('p1').state;
-    const guessing = exile6('p2', nextVote(afterUndercover)).state;
-    const after = run([{ type: 'guess', user: 'p2', word: guessing.words!.undercover }], guessing);
-    expect(after.state).toMatchObject({ phase: 'ended', winner: 'civilian' });
+  it('臥底和白板都出局：平民獲勝（先放逐白板、白板猜錯，再放逐臥底）', () => {
+    const guessing = exile6('p2').state;
+    const afterBlank = run([{ type: 'guess', user: 'p2', word: guessing.words!.undercover }], guessing).state;
+    expect(afterBlank.phase).toBe('speech');
+    expect(exile6('p1', nextVote(afterBlank)).state).toMatchObject({ phase: 'ended', winner: 'civilian' });
+  });
+
+  it('臥底出局但白板還活著：平民獲勝，遊戲立刻結束', () => {
+    const { state, events } = exile6('p1');
+    expect(state).toMatchObject({ phase: 'ended', winner: 'civilian' });
+    expect(state.players.find((p) => p.id === 'p2')!.alive).toBe(true);
+    expect(announces(events).join('\n')).toContain('平民獲勝');
+  });
+
+  it('兩位臥底只出局一位：遊戲繼續；兩位都出局：平民獲勝', () => {
+    const P = (role: 'civilian' | 'undercover' | 'blank', alive = true) => ({ id: role, alive, role });
+    const civilians = Array.from({ length: 6 }, () => P('civilian'));
+    expect(checkUndercoverWinner([P('undercover', false), P('undercover'), P('blank'), ...civilians])).toBeNull();
+    expect(checkUndercoverWinner([P('undercover', false), P('undercover', false), P('blank'), ...civilians])).toBe('civilian');
   });
 
   it('臥底陣營追上平民：臥底陣營獲勝', () => {
