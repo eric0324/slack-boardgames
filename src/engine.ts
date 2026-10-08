@@ -129,6 +129,7 @@ export interface Option {
 
 export type GameEvent =
   | { type: 'announce'; text: string; gif?: GifKey }
+  | { type: 'board'; text: string; rows: { value: string; label: string; style?: 'primary' | 'danger' }[][] }
   | { type: 'ephemeral'; to: string; text: string }
   | { type: 'dm'; to: string; text: string }
   | { type: 'wolfChat'; wolves: string[]; text: string }

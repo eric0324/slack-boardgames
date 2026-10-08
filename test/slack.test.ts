@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseAvalonCommand, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -476,7 +476,7 @@ describe('game-commands: /game 指令與多款遊戲', () => {
     const { host, calls } = setup();
     await host.game('C1', 'U1', 'alice', '');
     const text = lastEph(calls).text;
-    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new', '間諜危機', 'spyfall', '4～10 人', '/game spyfall new', '阿瓦隆', 'avalon', '5～10 人', '/game avalon new']) {
+    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new', '間諜危機', 'spyfall', '4～10 人', '/game spyfall new', '阿瓦隆', 'avalon', '5～10 人', '/game avalon new', '機密代號', 'codenames', '4～12 人', '/game codenames new']) {
       expect(text).toContain(s);
     }
   });
@@ -705,5 +705,83 @@ describe('game-commands: 阿瓦隆', () => {
     expect(parseAvalonCommand('addbot 4', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 4 });
     expect(parseAvalonCommand('vote', 'U1', 'C1')).toBeNull();
     expect(parseAvalonCommand('guess x', 'U1', 'C1')).toBeNull();
+  });
+});
+
+describe('game-commands: 機密代號', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+  async function startedHost() {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'codenames new');
+    for (const u of ['U2', 'U3', 'U4']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    return { host, calls, timers };
+  }
+
+  it('/game codenames new 開機密代號的房間，按鈕加入會更新公告', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'codenames new');
+    expect(calls.at(-1)!.args.text).toContain('機密代號房間');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.codenamesGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+  });
+
+  it('/game codenames help 列出機密代號的指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'codenames help');
+    const text = lastEph(calls).text;
+    for (const s of ['new', 'start', 'clue', 'next', 'cancel']) expect(text).toContain(`/game codenames ${s}`);
+  });
+
+  it('一個頻道同時只有一局', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'codenames new');
+    await host.game('C1', 'U2', 'bob', 'avalon new');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    const other = setup();
+    await other.host.game('C2', 'U1', 'alice', 'undercover new');
+    await other.host.game('C2', 'U2', 'bob', 'codenames new');
+    expect(lastEph(other.calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+  });
+
+  it('開始後貼出 5×5 牌桌，隊長收到答案；給提示、按字卡翻牌後牌桌原地更新', async () => {
+    const { host, calls } = await startedHost();
+    const boardPost = calls.find((c) => c.method === 'chat.postMessage' && buttonsOf(c).some((b: any) => b.action_id.startsWith('ww:guess:')))!;
+    const rows = boardPost.args.blocks.filter((b: any) => b.type === 'actions');
+    expect(rows).toHaveLength(5);
+    expect(rows[0].elements.map((b: any) => b.action_id)).toEqual(['ww:guess:0', 'ww:guess:1', 'ww:guess:2', 'ww:guess:3', 'ww:guess:4']);
+    expect(rows[0].elements[0].value).toBe('C1|0');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U2' && String(c.args.text).includes('答案'))).toBe(true);
+    await host.game('C1', 'U2', 'U2', 'codenames clue 水果 2');
+    expect(host.codenamesGames.get('C1')!.phase).toBe('guess');
+    await host.button('ww:guess:0', 'C1|0', 'U4', 'U4');
+    expect(host.codenamesGames.get('C1')!.cards[0].revealed).toBe(true);
+    const boardPosts = calls.filter((c) => c.method === 'chat.postMessage' && buttonsOf(c).some((b: any) => b.action_id.startsWith('ww:guess:')));
+    expect(boardPosts).toHaveLength(1);
+    const update = calls.filter((c) => c.method === 'chat.update' && buttonsOf(c).some((b: any) => b.action_id.startsWith('ww:guess:'))).at(-1);
+    expect(update).toBeDefined();
+    const first = update!.args.blocks.find((b: any) => b.type === 'actions').elements[0];
+    expect(first).toMatchObject({ style: 'primary', text: { text: expect.stringContaining('🟦') } });
+  });
+
+  it('結束猜牌按鈕和計時交給機密代號', async () => {
+    const { host, timers } = await startedHost();
+    await host.game('C1', 'U2', 'U2', 'codenames clue 水果 2');
+    await host.button('ww:guess:0', 'C1|0', 'U4', 'U4');
+    await host.button('ww:endGuess:0', 'C1|end', 'U4', 'U4');
+    expect(host.codenamesGames.get('C1')).toMatchObject({ phase: 'clue', turn: 'red' });
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.codenamesGames.get('C1')!.turn).toBe('blue');
+  });
+
+  it('指令解析：clue、next', () => {
+    expect(parseCodenamesCommand('clue 水果 2', 'U1', 'C1')).toEqual({ type: 'clue', user: 'U1', word: '水果', count: 2 });
+    expect(parseCodenamesCommand('clue 水 果 2', 'U1', 'C1')).toEqual({ type: 'clue', user: 'U1', word: '水 果', count: 2 });
+    expect(parseCodenamesCommand('clue 水果', 'U1', 'C1')).toBeNull();
+    expect(parseCodenamesCommand('next', 'U1', 'C1')).toEqual({ type: 'skipTurn', user: 'U1' });
+    expect(parseCodenamesCommand('addbot', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 1 });
   });
 });
