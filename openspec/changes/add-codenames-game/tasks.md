@@ -15,7 +15,7 @@
 
 ## 4. Slack adapter 與文件
 
-- [ ] 4.1 adapter：狀態 Map、`/game codenames` 指令與說明、遊戲清單、按鈕、`board` 貼出與原地更新、計時、一個頻道一局
+- [x] 4.1 adapter：狀態 Map、`/game codenames` 指令與說明、遊戲清單、按鈕、`board` 貼出與原地更新、計時、一個頻道一局
 - [ ] 4.2 manifest usage hint、README、wiki（首頁、入口頁、規則頁、指令頁、側邊欄）
 
 ## 5. 整合驗證
