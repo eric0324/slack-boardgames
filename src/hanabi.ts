@@ -1,5 +1,5 @@
 // 花火遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyHanabi(state, action, rng) → { state, events }。
-import { mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_HANABI_PLAYERS = 2;
 export const MAX_HANABI_PLAYERS = 5;
@@ -40,6 +40,8 @@ export interface HState {
   fuses: number;
   discard: HCard[];
   turn: number;
+  remaining?: number; // 牌堆抽完後還剩幾個回合
+  score?: number;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -56,9 +58,10 @@ export type HAction =
   | { type: 'play'; user: string; index: number }
   | { type: 'discard'; user: string; index: number }
   | { type: 'hint'; user: string; target: string; color?: Color; number?: number }
-  | { type: 'timeout'; id: number };
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<HAction, { type: 'new' }>;
+type GameAction = Exclude<HAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: HState;
@@ -155,7 +158,11 @@ const currentId = (s: HState) => s.players[s.turn].id;
 // 從手牌拿出一張，牌堆還有就補一張到最後
 function takeCard(s: HState, p: HPlayer, index: number) {
   const [card] = p.hand.splice(index, 1);
-  if (s.deck.length) p.hand.push(s.deck.shift()!);
+  if (s.deck.length) {
+    p.hand.push(s.deck.shift()!);
+    // 抽到最後一張：包含自己在內每人再輪一次（這個回合結束時會先扣 1）
+    if (!s.deck.length) s.remaining = s.players.length + 1;
+  }
   return card;
 }
 
@@ -174,6 +181,14 @@ function playCard(c: Ctx, user: string, index: number): boolean {
     s.fuses++;
     s.discard.push(card);
     c.events.push({ type: 'announce', text: `💥 ${mention(user)} 打出 ${show(card)}，失誤！（${s.fuses}／${MAX_FUSES}）` });
+    if (s.fuses >= MAX_FUSES) {
+      endGame(c, true);
+      return true;
+    }
+  }
+  if (COLORS.every((col) => s.fireworks[col] === 5)) {
+    endGame(c, false);
+    return true;
   }
   endTurn(c);
   return true;
@@ -220,8 +235,36 @@ function giveHint(c: Ctx, user: string, targetId: string, color?: Color, number?
 
 function endTurn(c: Ctx) {
   const s = c.s;
+  if (s.remaining !== undefined && --s.remaining <= 0) {
+    endGame(c, false);
+    return;
+  }
   s.turn = (s.turn + 1) % s.players.length;
   startTurn(c);
+}
+
+// 官方評價
+function rating(score: number) {
+  if (score >= 25) return '傳奇！大家的默契完美';
+  if (score >= 21) return '太棒了！';
+  if (score >= 16) return '很好';
+  if (score >= 11) return '還不錯';
+  if (score >= 6) return '平庸';
+  return '糟糕透頂';
+}
+
+// 結束：失誤 3 次得 0 分，否則是五種顏色打到的數字加總
+function endGame(c: Ctx, exploded: boolean) {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.score = exploded ? 0 : COLORS.reduce((n, col) => n + s.fireworks[col], 0);
+  const hands = s.players.map((p) => `${mention(p.id)}：${p.hand.map(show).join(' ')}`).join('\n');
+  const title = exploded ? `💥 煙火爆炸了！得分 0：${rating(0)}` : `🎆 遊戲結束！得分 ${s.score}：${rating(s.score)}`;
+  c.events.push(
+    { type: 'announce', text: `${title}\n煙火：${fireworksLine(s)}\n${hands}`, gif: exploded ? 'questFail' : 'goodWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -296,6 +339,15 @@ export function applyHanabi(state: HState | undefined, action: HAction, rng: Rng
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (state.score === undefined) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }

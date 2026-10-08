@@ -209,3 +209,55 @@ describe('hanabi/turns: 回合與計時', () => {
     expect(announces(hinted.events).join('\n')).toContain('<@p2> 提示 <@p1>');
   });
 });
+
+const fw = (red: number, yellow = 0, green = 0, blue = 0, white = 0) => ({ red, yellow, green, blue, white });
+describe('hanabi/turns: 結束與計分', () => {
+  it('失誤 3 次：煙火爆炸，得分 0', () => {
+    const { state, events } = play('p2', 0, { ...started(2).state, fuses: 2, fireworks: fw(1) });
+    expect(state).toMatchObject({ phase: 'ended', score: 0 });
+    expect(announces(events).join('\n')).toContain('爆炸');
+  });
+
+  it('五種顏色都打到 5：完美 25 分', () => {
+    const { state, events } = play('p2', 4, { ...started(2).state, fireworks: fw(4, 5, 5, 5, 5) });
+    expect(state).toMatchObject({ phase: 'ended', score: 25 });
+    expect(announces(events).at(-1)).toContain('傳奇');
+  });
+
+  it('牌堆抽完後每人（包含抽到最後一張的人）再輪一次就結束，得分是煙火加總', () => {
+    const base = started(2).state;
+    const s = { ...base, deck: base.deck.slice(0, 1), hints: 5, fireworks: fw(3, 2) };
+    const last = discard('p2', 0, s);
+    expect(last.state.deck).toHaveLength(0);
+    expect(last.state.phase).toBe('turn');
+    const p1 = discard('p1', 0, last.state);
+    expect(p1.state.phase).toBe('turn');
+    const end = discard('p2', 0, p1.state);
+    expect(end.state).toMatchObject({ phase: 'ended', score: 5 });
+    const text = announces(end.events).at(-1)!;
+    expect(text).toContain('得分 5');
+    expect(text).toContain('糟糕透頂');
+    expect(text).toContain('<@p1>：');
+  });
+
+  it.each([
+    [10, '平庸'],
+    [15, '還不錯'],
+    [20, '很好'],
+    [24, '太棒了'],
+  ])('%i 分「%s」', (score, rating) => {
+    const base = started(2).state;
+    const f = fw(Math.min(5, score), Math.min(5, Math.max(0, score - 5)), Math.min(5, Math.max(0, score - 10)), Math.min(5, Math.max(0, score - 15)), Math.max(0, score - 20));
+    const s = { ...base, deck: [], fireworks: f, hints: 5, remaining: 1 };
+    expect(announces(discard('p2', 0, s).events).at(-1)).toContain(rating);
+  });
+
+  it('貼出再來一局；上一局的玩家可以開新房間；取消的遊戲不能', () => {
+    const { state, events } = play('p2', 0, { ...started(2).state, fuses: 2, fireworks: fw(1) });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'prompt', kind: 'rematch' }));
+    expect(run([{ type: 'rematch', user: 'p1', channel: 'C1' }], state).state).toMatchObject({ phase: 'lobby', host: 'p1' });
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], state).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(2).state).state;
+    expect(run([{ type: 'rematch', user: 'p1', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
