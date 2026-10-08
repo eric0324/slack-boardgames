@@ -6,8 +6,11 @@ import { LOCATIONS } from './spyfallLocations.js';
 export const MIN_SPYFALL_PLAYERS = 4;
 export const MAX_SPYFALL_PLAYERS = 10;
 const TITLE = '間諜危機';
+const QA_MS = 8 * 60_000;
+const REMIND_MS = 60_000;
+const STEP_MS = 40_000;
 
-export type SPhase = 'lobby' | 'qa' | 'ended';
+export type SPhase = 'lobby' | 'qa' | 'vote' | 'ended';
 
 export interface SPlayer {
   id: string;
@@ -24,7 +27,8 @@ export interface SState {
   players: SPlayer[];
   location?: string;
   timerSeq: number;
-  timers: { step?: number; total?: number };
+  qa?: { step: 'choose' | 'answer'; asker: string; target?: string; lastAsker?: string };
+  timers: { step?: number; remind?: number; total?: number };
 }
 
 export type SAction =
@@ -33,6 +37,10 @@ export type SAction =
   | { type: 'leave'; user: string }
   | { type: 'start'; user: string }
   | { type: 'cancel'; user: string }
+  | { type: 'askTarget'; user: string; target: string }
+  | { type: 'endAnswer'; user: string }
+  | { type: 'skipSpeaker'; user: string }
+  | { type: 'endDiscussion'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'timeout'; id: number };
@@ -105,6 +113,65 @@ function deal(c: Ctx) {
   }
 }
 
+function startTimer(c: Ctx, ms: number): number {
+  const id = ++c.s.timerSeq;
+  c.events.push({ type: 'startTimer', id, ms });
+  return id;
+}
+
+// 提問階段：隨機第一位提問者，總時長 8 分鐘（剩 1 分鐘時提醒）
+function startQa(c: Ctx) {
+  const s = c.s;
+  s.phase = 'qa';
+  c.events.push({ type: 'announce', text: `⏱️ 提問開始！總共 ${QA_MS / 60_000} 分鐘，大家接力互相提問。` });
+  s.timers.remind = startTimer(c, QA_MS - REMIND_MS);
+  askNext(c, pick(s.players, c.rng).id, undefined);
+}
+
+// 可以被問的人：除了自己和剛剛問自己的人
+const targetsOf = (s: SState) => s.players.map((p) => p.id).filter((id) => id !== s.qa!.asker && id !== s.qa!.lastAsker);
+
+function askNext(c: Ctx, asker: string, lastAsker: string | undefined) {
+  const s = c.s;
+  s.qa = { step: 'choose', asker, lastAsker };
+  c.events.push({
+    type: 'prompt',
+    kind: 'askTarget',
+    audience: 'channel',
+    text: `❓ 輪到 ${mention(asker)} 提問，選擇要問誰（${STEP_MS / 1000} 秒）`,
+    options: targetsOf(s).map((id) => ({ value: id, label: id })),
+  });
+  s.timers.step = startTimer(c, STEP_MS);
+}
+
+function ask(c: Ctx, target: string) {
+  const s = c.s;
+  const qa = s.qa!;
+  s.qa = { ...qa, step: 'answer', target };
+  c.events.push({
+    type: 'prompt',
+    kind: 'endAnswer',
+    audience: 'channel',
+    text: `🎤 ${mention(qa.asker)} 問 ${mention(target)}（${STEP_MS / 1000} 秒）`,
+    options: [{ value: target, label: '回答完畢' }],
+  });
+  s.timers.step = startTimer(c, STEP_MS);
+}
+
+// 推進卡住的步驟：還沒選人就隨機選，正在回答就換被問的人提問
+function advance(c: Ctx) {
+  const qa = c.s.qa!;
+  if (qa.step === 'choose') ask(c, pick(targetsOf(c.s), c.rng));
+  else askNext(c, qa.target!, qa.asker);
+}
+
+function startVote(c: Ctx) {
+  const s = c.s;
+  s.phase = 'vote';
+  s.qa = undefined;
+  s.timers = {};
+}
+
 function handle(c: Ctx, action: GameAction): boolean {
   const s = c.s;
   switch (action.type) {
@@ -160,7 +227,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (n < MIN_SPYFALL_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_SPYFALL_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'qa' }));
       deal(c);
-      s.phase = 'qa';
+      startQa(c);
       return true;
     }
     case 'cancel': {
@@ -170,8 +237,41 @@ function handle(c: Ctx, action: GameAction): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
-      return false;
+    case 'askTarget': {
+      if (s.phase !== 'qa' || s.qa!.step !== 'choose') return false;
+      if (action.user !== s.qa!.asker) return reply(c, action.user, '現在不是你提問。');
+      if (!targetsOf(s).includes(action.target)) return false;
+      ask(c, action.target);
+      return true;
+    }
+    case 'endAnswer': {
+      if (s.phase !== 'qa' || s.qa!.step !== 'answer') return false;
+      if (action.user !== s.qa!.target) return reply(c, action.user, '現在不是你回答。');
+      advance(c);
+      return true;
+    }
+    case 'skipSpeaker': {
+      if (s.phase !== 'qa') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過。');
+      advance(c);
+      return true;
+    }
+    case 'endDiscussion': {
+      if (s.phase !== 'qa') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以直接進入投票。');
+      startVote(c);
+      return true;
+    }
+    case 'timeout': {
+      if (s.phase === 'qa' && action.id === s.timers.step) advance(c);
+      else if (s.phase === 'qa' && action.id === s.timers.remind) {
+        c.events.push({ type: 'announce', text: '⏰ 提問時間剩下 1 分鐘！' });
+        s.timers.remind = undefined;
+        s.timers.total = startTimer(c, REMIND_MS);
+      } else if (s.phase === 'qa' && action.id === s.timers.total) startVote(c);
+      else return false;
+      return true;
+    }
   }
 }
 

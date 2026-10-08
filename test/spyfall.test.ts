@@ -112,3 +112,71 @@ describe('spyfall/setup: 發牌', () => {
     expect(a.players.findIndex((p) => p.role === 'spy')).not.toBe(b.players.findIndex((p) => p.role === 'spy'));
   });
 });
+
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const timers = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[];
+const timerOf = (events: GameEvent[], ms: number) => timers(events).filter((t) => t.ms === ms).at(-1)!;
+const values = (p: { options: { value: string }[] }) => p.options.map((o) => o.value);
+
+// 4 人局（p4 是間諜），rng 固定時第一位提問者是 p4
+describe('spyfall/rounds: 接力提問', () => {
+  it('提問開始：公告 8 分鐘，第一位提問者收到選人按鈕', () => {
+    const { state, events } = started(4);
+    expect(state).toMatchObject({ phase: 'qa', qa: { step: 'choose', asker: 'p4' } });
+    expect(announces(events)).toContainEqual(expect.stringContaining('8 分鐘'));
+    const p = prompts(events, 'askTarget').at(-1)!;
+    expect(p).toMatchObject({ audience: 'channel', text: expect.stringContaining('輪到 <@p4> 提問') });
+    expect(values(p)).toEqual(['p1', 'p2', 'p3']);
+    expect(timerOf(events, 40_000)).toBeDefined();
+    expect(timerOf(events, 7 * 60_000)).toBeDefined();
+  });
+
+  it('選人後公告誰問誰；回答完畢後換被問的人提問，不能反問剛剛問自己的人', () => {
+    const asked = run([{ type: 'askTarget', user: 'p4', target: 'p2' }], started(4).state);
+    expect(asked.state.qa).toMatchObject({ step: 'answer', asker: 'p4', target: 'p2' });
+    const ans = prompts(asked.events, 'endAnswer').at(-1)!;
+    expect(ans.text).toContain('🎤 <@p4> 問 <@p2>（40 秒）');
+    expect(values(ans)).toEqual(['p2']);
+    const next = run([{ type: 'endAnswer', user: 'p2' }], asked.state);
+    expect(next.state.qa).toMatchObject({ step: 'choose', asker: 'p2' });
+    expect(values(prompts(next.events, 'askTarget').at(-1)!)).toEqual(['p1', 'p3']);
+  });
+
+  it('只有提問者能選人，只有被問的人能按回答完畢', () => {
+    const { state } = started(4);
+    expect(ephemeralTo(run([{ type: 'askTarget', user: 'p1', target: 'p2' }], state).events, 'p1')).toBeDefined();
+    const asked = run([{ type: 'askTarget', user: 'p4', target: 'p2' }], state).state;
+    const denied = run([{ type: 'endAnswer', user: 'p3' }], asked);
+    expect(denied.state.qa!.step).toBe('answer');
+    expect(ephemeralTo(denied.events, 'p3')).toBeDefined();
+  });
+
+  it('提問者 40 秒沒選人：系統隨機選一位', () => {
+    const { state, events } = started(4);
+    const after = run([{ type: 'timeout', id: timerOf(events, 40_000).id }], state);
+    expect(after.state.qa!.step).toBe('answer');
+    expect(['p1', 'p2', 'p3']).toContain(after.state.qa!.target);
+  });
+
+  it('被問的人 40 秒到了就換人提問', () => {
+    const asked = run([{ type: 'askTarget', user: 'p4', target: 'p2' }], started(4).state);
+    const after = run([{ type: 'timeout', id: timerOf(asked.events, 40_000).id }], asked.state);
+    expect(after.state.qa).toMatchObject({ step: 'choose', asker: 'p2' });
+  });
+
+  it('房主可以跳過卡住的步驟，也可以直接進入投票', () => {
+    const { state } = started(4);
+    expect(run([{ type: 'skipSpeaker', user: 'p1' }], state).state.qa!.step).toBe('answer');
+    expect(run([{ type: 'endDiscussion', user: 'p1' }], state).state.phase).toBe('vote');
+  });
+
+  it('提問時間剩 1 分鐘時提醒，8 分鐘到了進入投票', () => {
+    const { state, events } = started(4);
+    const remind = run([{ type: 'timeout', id: timerOf(events, 7 * 60_000).id }], state);
+    expect(announces(remind.events)).toContainEqual(expect.stringContaining('剩下 1 分鐘'));
+    expect(remind.state.phase).toBe('qa');
+    const end = run([{ type: 'timeout', id: timerOf(remind.events, 60_000).id }], remind.state);
+    expect(end.state.phase).toBe('vote');
+  });
+});
