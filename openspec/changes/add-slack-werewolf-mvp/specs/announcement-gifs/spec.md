@@ -53,7 +53,7 @@
 - **THEN** 公告以「☀️」開頭
 
 ### Requirement: 開始公告提醒查看私訊
-遊戲開始的頻道公告 SHALL 提醒玩家「身分已經用私訊傳給每個人，請到和 bot 的私訊查看」，並附上 GitHub wiki 上「遊戲規則」頁面的連結。
+遊戲開始的頻道公告 SHALL 提醒玩家「身分已經用私訊傳給每個人，請到和 bot 的私訊查看」，並附上 GitHub wiki 上「狼人殺-遊戲規則」頁面的連結。
 
 #### Scenario: 開始公告提醒查看私訊
 - **WHEN** 遊戲開始
@@ -61,4 +61,4 @@
 
 #### Scenario: 開始公告附上規則連結
 - **WHEN** 遊戲開始
-- **THEN** 頻道的開始公告裡有可以點的「遊戲規則」連結，指向 https://github.com/eric0324/slack-boardgames/wiki/遊戲規則
+- **THEN** 頻道的開始公告裡有可以點的「遊戲規則」連結，指向 https://github.com/eric0324/slack-boardgames/wiki/狼人殺-遊戲規則

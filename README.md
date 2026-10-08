@@ -6,7 +6,7 @@
 
 - **狼人殺**（`/werewolf`）：6～12 人，角色有狼人、狼王、村民、預言家、女巫、騎士，採用屠邊規則；人不夠時可以加 bot 補位
 
-玩法和指令請看 [wiki](https://github.com/eric0324/slack-boardgames/wiki)：[遊戲規則](https://github.com/eric0324/slack-boardgames/wiki/遊戲規則)、[指令](https://github.com/eric0324/slack-boardgames/wiki/指令)。
+各遊戲的玩法和指令請看 [wiki](https://github.com/eric0324/slack-boardgames/wiki)。狼人殺：[遊戲規則](https://github.com/eric0324/slack-boardgames/wiki/狼人殺-遊戲規則)、[指令](https://github.com/eric0324/slack-boardgames/wiki/狼人殺-指令)。
 
 ## 建立 Slack App
 
