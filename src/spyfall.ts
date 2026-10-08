@@ -1,6 +1,6 @@
 // 間諜危機遊戲引擎：純邏輯，不碰任何 I/O。介面和誰是臥底一樣：applySpyfall(state, action, rng) → { state, events }。
 import { randomBotName } from './botLines.js';
-import { isBot, mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type GifKey, type Rng } from './engine.js';
 import { LOCATIONS, QUESTIONS, SPY_ANSWERS } from './spyfallLocations.js';
 
 export const MIN_SPYFALL_PLAYERS = 4;
@@ -311,13 +311,14 @@ function accuse(c: Ctx, id: string) {
   c.events.push({ type: 'announce', text: `👉 ${mention(id)} 被指控！` });
   if (s.players.find((p) => p.id === id)!.role !== 'spy') {
     c.events.push({ type: 'announce', text: `😱 ${mention(id)} 是平民，抓錯人了！` });
-    endGame(c, 'spy');
+    endGame(c, 'spy', 'duelLose');
     return;
   }
   s.phase = 'lastGuess';
   s.timers = {};
   c.events.push({
     type: 'announce',
+    gif: 'duelWin',
     text: `🕵️ 抓到間諜了！${mention(id)} 有 ${GUESS_MS / 1000} 秒最後一次機會：輸入 \`/game spyfall guess <地點>\`，猜中就逆轉獲勝。`,
   });
   s.timers.step = startTimer(c, GUESS_MS);
@@ -335,11 +336,12 @@ function finishGuess(c: Ctx, location: string | undefined) {
   else if (hit) text = `🎯 ${spy} 猜「${location.trim()}」，猜中了！`;
   else text = `❌ ${spy} 猜「${location.trim()}」，猜錯了。`;
   c.events.push({ type: 'announce', text });
-  endGame(c, hit ? 'spy' : 'civilian');
+  endGame(c, hit ? 'spy' : 'civilian', hit ? 'guessRight' : 'guessWrong');
 }
 
 // 結束：公開獲勝方、地點、間諜和每位平民的角色
-function endGame(c: Ctx, winner: 'spy' | 'civilian') {
+// gif 是造成結束的時刻的 GIF，取代勝利 GIF
+function endGame(c: Ctx, winner: 'spy' | 'civilian', gif?: GifKey) {
   const s = c.s;
   s.phase = 'ended';
   s.timers = {};
@@ -353,7 +355,7 @@ function endGame(c: Ctx, winner: 'spy' | 'civilian') {
     {
       type: 'announce',
       text: `${title}\n地點：${s.location}\n間諜：${mention(spyOf(s))}\n${roster}`,
-      gif: winner === 'civilian' ? 'goodWin' : 'wolvesWin',
+      gif: gif ?? (winner === 'civilian' ? 'goodWin' : 'wolvesWin'),
     },
     { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
   );

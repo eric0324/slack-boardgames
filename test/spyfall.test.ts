@@ -422,3 +422,35 @@ describe('spyfall/bots: bot 投票與猜地點', () => {
     }
   });
 });
+
+const gifOf = (events: GameEvent[], text: string) =>
+  (events.find((e) => e.type === 'announce' && e.text.includes(text)) as { gif?: string } | undefined)?.gif;
+const gifs = (events: GameEvent[]) => events.filter((e) => e.type === 'announce' && e.gif).map((e) => (e as { gif: string }).gif);
+
+describe('announcement-gifs: 間諜危機', () => {
+  const accuseAll = (target: string) =>
+    votes(['p1', 'p2', 'p3', 'p4'].map((v) => [v, v === target ? 'abstain' : target] as [string, string]), voting().state);
+
+  it('抓到間諜：附「抓到了」的 GIF，接著間諜最後猜地點', () => {
+    const { state, events } = accuseAll('p4');
+    expect(state.phase).toBe('lastGuess');
+    expect(gifOf(events, '抓到間諜')).toBe('duelWin');
+  });
+
+  it('抓錯人：結束公告附「抓錯了」的 GIF，只有一張', () => {
+    const { events } = accuseAll('p2');
+    expect(gifs(events)).toEqual(['duelLose']);
+    expect(gifOf(events, '遊戲結束')).toBe('duelLose');
+  });
+
+  it('間諜猜對或猜錯：結束公告附對應的 GIF，只有一張', () => {
+    const right = run([{ type: 'guess', user: 'p4', location: '飯店' }], started(4).state).events;
+    expect(gifs(right)).toEqual(['guessRight']);
+    expect(gifOf(right, '遊戲結束')).toBe('guessRight');
+    const wrong = run([{ type: 'guess', user: 'p4', location: '夜市' }], started(4).state).events;
+    expect(gifs(wrong)).toEqual(['guessWrong']);
+    const caught = accuseAll('p4');
+    const timeout = run([{ type: 'timeout', id: timerOf(caught.events, 60_000).id }], caught.state).events;
+    expect(gifs(timeout)).toEqual(['guessWrong']);
+  });
+});
