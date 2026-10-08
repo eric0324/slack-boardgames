@@ -77,3 +77,40 @@ describe('justone/setup: 牌堆', () => {
     expect(a.word).not.toBe(b.word);
   });
 });
+
+const lastTimer = (events: GameEvent[]) => (events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[]).at(-1)!;
+const clue = (user: string, word: string, s: JState) => run([{ type: 'clue', user, word }], s);
+const clues = (pairs: [string, string][], s: JState) => run(pairs.map(([user, word]) => ({ type: 'clue', user, word }) as JAction), s);
+
+// 4 人局：p4 猜詞，p1～p3 給提示
+describe('justone/rounds: 給提示', () => {
+  it('私訊其他人這輪的詞，猜詞的人沒有；90 秒', () => {
+    const { state, events } = started(4);
+    for (const id of ['p1', 'p2', 'p3']) expect(dmTo(events, id)!.text).toContain(`「${state.word}」`);
+    expect(dmTo(events, 'p4')).toBeUndefined();
+    expect(lastTimer(events).ms).toBe(90_000);
+  });
+
+  it('給提示：只有自己看到已收到，頻道公告人數；可以覆蓋', () => {
+    const s = started(4).state;
+    const { state, events } = clue('p1', '牛頓', s);
+    expect(state.clues).toEqual({ p1: '牛頓' });
+    expect(ephemeralTo(events, 'p1')).toMatchObject({ text: expect.stringContaining('已收到') });
+    expect(announces(events).at(-1)).toContain('1／3');
+    expect(announces(events).join('\n')).not.toContain('牛頓');
+    expect(clue('p1', '紅色', state).state.clues).toEqual({ p1: '紅色' });
+  });
+
+  it('猜詞的人、不在遊戲裡的人不能給；提示不能有空白', () => {
+    const s = started(4).state;
+    expect(ephemeralTo(clue('p4', '水果', s).events, 'p4')).toMatchObject({ text: expect.stringContaining('不能給提示') });
+    expect(clue('x', '水果', s).state.clues).toEqual({});
+    expect(ephemeralTo(clue('p1', '水 果', s).events, 'p1')).toMatchObject({ text: expect.stringContaining('一個詞') });
+  });
+
+  it('所有人都給了，或 90 秒到了，就結束給提示', () => {
+    expect(clues([['p1', 'a'], ['p2', 'b'], ['p3', 'c']], started(4).state).state.phase).toBe('guess');
+    const st = started(4);
+    expect(run([{ type: 'timeout', id: lastTimer(st.events).id }], clue('p1', 'a', st.state).state).state.phase).toBe('guess');
+  });
+});
