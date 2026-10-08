@@ -49,6 +49,7 @@ export interface KState {
   after: 'next' | 'proceed' | 'execute' | 'blocked'; // 翻完牌之後要做什麼
   claim?: { by: string; role: Role; forBlock: boolean }; // 等著被質疑的宣稱
   exchange?: { pool: Role[]; keep: number[]; count: number }; // 大使交換：可選的牌、已選的位置、要留幾張
+  passed: string[]; // 這個反應視窗裡已經決定不反應的 bot
   winner?: string;
   timerSeq: number;
   timers: { phase?: number };
@@ -68,6 +69,7 @@ export type KAction =
   | { type: 'challenge'; user: string }
   | { type: 'block'; user: string; role: Role }
   | { type: 'keep'; user: string; index: number }
+  | { type: 'pass'; user: string }
   | { type: 'timeout'; id: number }
   | { type: 'rematch'; user: string; channel: string };
 
@@ -248,6 +250,7 @@ function chooseTarget(c: Ctx, user: string, targetId: string): boolean {
 function openChallenge(c: Ctx, by: string, role: Role, forBlock: boolean, what: string) {
   const s = c.s;
   s.phase = 'challenge';
+  s.passed = [];
   s.claim = { by, role, forBlock };
   c.events.push(
     { type: 'announce', text: `🎭 ${mention(by)} 宣稱「${ROLE_NAME[role]}」：${what}` },
@@ -298,6 +301,7 @@ const blockers = (s: KState) => {
 function openBlock(c: Ctx) {
   const s = c.s;
   s.phase = 'block';
+  s.passed = [];
   const { kind } = s.pending!;
   const who = kind === 'foreignAid' ? '任何人' : mention(s.pending!.target!);
   c.events.push({
@@ -452,6 +456,67 @@ function finishExchange(c: Ctx, keep: number[]) {
   nextTurn(c);
 }
 
+// 反應視窗裡可以反應的人
+const reactors = (s: KState) =>
+  s.phase === 'challenge' ? s.players.filter((p) => alive(p) && p.id !== s.claim!.by).map((p) => p.id) : blockers(s);
+
+const has = (p: KPlayer, role: Role) => p.cards.some((x) => !x.revealed && x.role === role);
+const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
+
+// bot 的簡單策略：有角色就用、偶爾假裝公爵、20% 機率質疑、有牌就阻擋
+function nextBotAction(s: KState, rng: Rng): GameAction | null {
+  const others = (id: string) => s.players.filter((p) => p.id !== id && alive(p));
+  if (s.phase === 'action') {
+    const me = current(s);
+    if (!isBot(me.id)) return null;
+    if (me.coins >= 7) return { type: 'act', user: me.id, kind: 'coup' };
+    if (has(me, 'duke')) return { type: 'act', user: me.id, kind: 'tax' };
+    if (has(me, 'assassin') && me.coins >= 3) return { type: 'act', user: me.id, kind: 'assassinate' };
+    if (has(me, 'captain') && others(me.id).some((p) => p.coins > 0)) return { type: 'act', user: me.id, kind: 'steal' };
+    return { type: 'act', user: me.id, kind: rng() < 0.3 ? 'tax' : 'income' };
+  }
+  if (s.phase === 'target' && isBot(s.pending!.actor)) {
+    const pool = others(s.pending!.actor);
+    const rich = s.pending!.kind === 'steal' ? pool.filter((p) => p.coins > 0) : pool;
+    return { type: 'target', user: s.pending!.actor, target: pick(rich.length ? rich : pool, rng).id };
+  }
+  if (s.phase === 'challenge' || s.phase === 'block') {
+    const bot = reactors(s).find((id) => isBot(id) && !s.passed.includes(id));
+    if (!bot) return null;
+    if (s.phase === 'challenge') return rng() < 0.2 ? { type: 'challenge', user: bot } : { type: 'pass', user: bot };
+    const me = playerOf(s, bot);
+    const role = BLOCK[s.pending!.kind]!.find((r) => has(me, r));
+    if (role) return { type: 'block', user: bot, role };
+    if (s.pending!.kind === 'assassinate' && hidden(me).length === 1) return { type: 'block', user: bot, role: 'contessa' };
+    return { type: 'pass', user: bot };
+  }
+  if (s.phase === 'lose' && isBot(s.losing[0])) {
+    return { type: 'reveal', user: s.losing[0], index: pick(hidden(playerOf(s, s.losing[0])), rng)[1] };
+  }
+  if (s.phase === 'exchange' && isBot(s.pending!.actor)) {
+    const ex = s.exchange!;
+    return { type: 'keep', user: s.pending!.actor, index: pick(ex.pool.map((_, i) => i).filter((i) => !ex.keep.includes(i)), rng) };
+  }
+  return null;
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+  }
+}
+
+// 反應視窗結束沒人反應：質疑視窗 → 繼續（阻擋成立或行動照常），阻擋視窗 → 執行
+function closeWindow(c: Ctx) {
+  const s = c.s;
+  if (s.phase === 'block') execute(c);
+  else if (s.claim!.forBlock) {
+    s.after = 'blocked';
+    afterLoss(c);
+  } else proceed(c);
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -556,21 +621,21 @@ function handle(c: Ctx, action: GameAction): boolean {
       else promptKeep(c);
       return true;
     }
+    case 'pass': {
+      if (s.phase !== 'challenge' && s.phase !== 'block') return false;
+      s.passed.push(action.user);
+      // 能反應的都是 bot 而且都不反應：不用等計時
+      if (reactors(s).every((id) => isBot(id) && s.passed.includes(id))) closeWindow(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
       if (s.phase === 'exchange') {
         finishExchange(c, Array.from({ length: s.exchange!.count }, (_, i) => i));
         return true;
       }
-      if (s.phase === 'block') {
-        execute(c);
-        return true;
-      }
-      if (s.phase === 'challenge') {
-        if (s.claim!.forBlock) {
-          s.after = 'blocked';
-          afterLoss(c);
-        } else proceed(c);
+      if (s.phase === 'block' || s.phase === 'challenge') {
+        closeWindow(c);
         return true;
       }
       if (s.phase === 'lose') {
@@ -611,6 +676,7 @@ export function applyCoup(state: KState | undefined, action: KAction, rng: Rng):
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
+  if (changed) runBots(c);
   return { state: changed ? c.s : state, events: c.events };
 }
 
@@ -625,6 +691,7 @@ function createLobby(prev: KState | undefined, host: string, channel: string): R
     turn: 0,
     losing: [],
     after: 'next',
+    passed: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };

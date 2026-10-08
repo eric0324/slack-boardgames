@@ -359,3 +359,44 @@ describe('coup/turns: 交換', () => {
     expect(after.state.players[2].cards.map((x) => x.role)).toEqual(['assassin', 'assassin']);
   });
 });
+
+// 1 真人 + 2 bot：p1 公爵公爵、bot1 公爵刺客、bot2 刺客刺客；bot2 先（金幣不夠刺殺，收入），接著 p1
+const withBots = () => run([{ type: 'addBot', user: 'p1', count: 2 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+
+describe('coup/bots: bot 的行動與反應', () => {
+  it('bot 立刻行動：沒有能用的角色就收入，輪到真人', () => {
+    const { state } = withBots();
+    expect(state.players[2].coins).toBe(3);
+    expect(state).toMatchObject({ phase: 'action', turn: 0 });
+  });
+
+  it('bot 手上有公爵就收稅', () => {
+    const { state } = act('p1', 'income', withBots().state);
+    expect(state.claim).toMatchObject({ by: state.players[1].id, role: 'duke' });
+  });
+
+  it('bot 手上有能阻擋的角色就阻擋', () => {
+    const { state } = act('p1', 'foreignAid', withBots().state);
+    expect(state.phase).toBe('challenge');
+    expect(state.claim).toMatchObject({ by: state.players[1].id, role: 'duke', forBlock: true });
+  });
+
+  it('bot 失去影響力時立刻隨機翻一張', () => {
+    const s = coins(withBots().state, [7, 2, 3]);
+    const { state } = target('p1', s.players[1].id, act('p1', 'coup', s).state);
+    expect(state.players[1].cards.filter((x) => x.revealed)).toHaveLength(1);
+    expect(state.phase).not.toBe('lose');
+  });
+
+  it('1 位真人加 bot、真人什麼都不做，遊戲一定會結束', () => {
+    for (const bots of [2, 3, 5]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = seeded(seed);
+        let s = run([{ type: 'addBot', user: 'p1', count: bots }, { type: 'start', user: 'p1' }], lobbyWith(1).state, r).state;
+        for (let step = 0; step < 1000 && s.phase !== 'ended'; step++) s = applyCoup(s, { type: 'timeout', id: s.timers.phase! }, r).state;
+        expect(s.phase, `${bots} bots, seed ${seed}`).toBe('ended');
+      }
+    }
+  });
+});
