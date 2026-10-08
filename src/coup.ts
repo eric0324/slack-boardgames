@@ -9,8 +9,9 @@ const ACTION_MS = 60_000;
 const TARGET_MS = 30_000;
 const LOSE_MS = 30_000;
 const REACT_MS = 20_000;
+const EXCHANGE_MS = 30_000;
 
-export type KPhase = 'lobby' | 'action' | 'target' | 'challenge' | 'block' | 'lose' | 'ended';
+export type KPhase = 'lobby' | 'action' | 'target' | 'challenge' | 'block' | 'lose' | 'exchange' | 'ended';
 export type ActKind = 'income' | 'foreignAid' | 'coup' | 'tax' | 'assassinate' | 'steal' | 'exchange';
 
 export type Role = 'duke' | 'assassin' | 'captain' | 'ambassador' | 'contessa';
@@ -47,6 +48,7 @@ export interface KState {
   losing: string[]; // 等著選要翻開哪張牌的玩家
   after: 'next' | 'proceed' | 'execute' | 'blocked'; // 翻完牌之後要做什麼
   claim?: { by: string; role: Role; forBlock: boolean }; // 等著被質疑的宣稱
+  exchange?: { pool: Role[]; keep: number[]; count: number }; // 大使交換：可選的牌、已選的位置、要留幾張
   winner?: string;
   timerSeq: number;
   timers: { phase?: number };
@@ -65,6 +67,7 @@ export type KAction =
   | { type: 'reveal'; user: string; index: number }
   | { type: 'challenge'; user: string }
   | { type: 'block'; user: string; role: Role }
+  | { type: 'keep'; user: string; index: number }
   | { type: 'timeout'; id: number }
   | { type: 'rematch'; user: string; channel: string };
 
@@ -323,6 +326,9 @@ function execute(c: Ctx) {
     t.coins -= n;
     p.coins += n;
     c.events.push({ type: 'announce', text: `🏴‍☠️ ${mention(actor)} 從 ${mention(t.id)} 勒索了 ${n} 枚金幣。` });
+  } else if (kind === 'exchange') {
+    startExchange(c, p);
+    return;
   } else if (kind === 'assassinate' && t && alive(t)) {
     c.events.push({ type: 'announce', text: `🗡️ ${mention(actor)} 刺殺 ${mention(t.id)}！` });
     loseInfluence(c, [t.id]);
@@ -403,6 +409,47 @@ function endGame(c: Ctx, winner: string) {
     { type: 'announce', text: `🏆 遊戲結束，${mention(winner)} 獲勝！\n${roster}`, gif: 'goodWin' },
     { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
   );
+}
+
+// 大使交換：手上的暗牌加上牌堆抽 2 張，私訊選要留下的牌
+function startExchange(c: Ctx, p: KPlayer) {
+  const s = c.s;
+  const own = hidden(p).map(([x]) => x.role);
+  const drawn = [s.deck.shift()!, s.deck.shift()!];
+  s.phase = 'exchange';
+  s.exchange = { pool: [...own, ...drawn], keep: [], count: own.length };
+  c.events.push({ type: 'announce', text: `🔄 ${mention(p.id)} 正在交換手牌…` });
+  promptKeep(c);
+  startTimer(c, EXCHANGE_MS);
+}
+
+function promptKeep(c: Ctx) {
+  const s = c.s;
+  const ex = s.exchange!;
+  const actor = s.pending!.actor;
+  c.events.push({
+    type: 'prompt',
+    kind: 'keepCard',
+    audience: 'user',
+    user: actor,
+    text: `🔄 選 ${ex.count - ex.keep.length} 張要留下的牌（${EXCHANGE_MS / 1000} 秒，超時留原本的牌）`,
+    options: ex.pool.map((r, i) => ({ value: String(i), label: ROLE_NAME[r] })).filter((_, i) => !ex.keep.includes(i)),
+  });
+}
+
+function finishExchange(c: Ctx, keep: number[]) {
+  const s = c.s;
+  const ex = s.exchange!;
+  const p = playerOf(s, s.pending!.actor);
+  const slots = hidden(p).map(([, i]) => i);
+  slots.forEach((slot, k) => (p.cards[slot].role = ex.pool[keep[k]]));
+  s.deck = shuffle([...s.deck, ...ex.pool.filter((_, i) => !keep.includes(i))], c.rng);
+  s.exchange = undefined;
+  c.events.push(
+    { type: 'announce', text: `🔄 ${mention(p.id)} 完成交換。` },
+    { type: 'dm', to: p.id, text: `🃏 交換完成，現在的手牌：${cardList(p)}` },
+  );
+  nextTurn(c);
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -500,8 +547,21 @@ function handle(c: Ctx, action: GameAction): boolean {
       openChallenge(c, action.user, action.role, true, `阻擋 ${mention(s.pending!.actor)} 的${ACT_LABEL[s.pending!.kind]}`);
       return true;
     }
+    case 'keep': {
+      const ex = s.exchange;
+      if (s.phase !== 'exchange' || !ex || action.user !== s.pending!.actor) return false;
+      if (!ex.pool[action.index] || ex.keep.includes(action.index)) return false;
+      ex.keep.push(action.index);
+      if (ex.keep.length === ex.count) finishExchange(c, ex.keep);
+      else promptKeep(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'exchange') {
+        finishExchange(c, Array.from({ length: s.exchange!.count }, (_, i) => i));
+        return true;
+      }
       if (s.phase === 'block') {
         execute(c);
         return true;

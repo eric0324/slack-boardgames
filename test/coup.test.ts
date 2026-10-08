@@ -321,3 +321,41 @@ describe('coup/turns: 阻擋', () => {
     expect(block('p2', 'ambassador', blocking.state).state.phase).toBe('challenge');
   });
 });
+
+const keep = (user: string, indexes: number[], s: KState) =>
+  run(indexes.map((index) => ({ type: 'keep', user, index }) as KAction), s);
+
+describe('coup/turns: 交換', () => {
+  // p3（刺客刺客）宣稱大使交換，沒人質疑；牌堆最上面是隊長、隊長
+  const exchanging = () => passWindow(act('p3', 'exchange', started(3).state));
+
+  it('私訊手上的牌加上牌堆抽的 2 張，選要留下的張數', () => {
+    const { state, events } = exchanging();
+    expect(state.phase).toBe('exchange');
+    const p = prompts(events, 'keepCard').at(-1)!;
+    expect(p).toMatchObject({ audience: 'user', user: 'p3' });
+    expect(p.options.map((o) => o.label)).toEqual(['刺客', '刺客', '隊長', '隊長']);
+    expect(lastTimer(events).ms).toBe(30_000);
+  });
+
+  it('選完後換成新的手牌，其他放回牌堆，輪到下一位', () => {
+    const s = exchanging().state;
+    const deckSize = s.deck.length;
+    const { state, events } = keep('p3', [2, 3], s);
+    expect(state.players[2].cards.map((x) => x.role)).toEqual(['captain', 'captain']);
+    expect(state.deck).toHaveLength(deckSize + 2);
+    expect(state.deck.filter((r) => r === 'assassin')).toHaveLength(2);
+    expect(state).toMatchObject({ phase: 'action', turn: 0 });
+    expect(events.some((e) => e.type === 'dm' && e.to === 'p3' && e.text.includes('隊長、隊長'))).toBe(true);
+  });
+
+  it('只剩一張牌時只留一張；只有交換的人能選；30 秒超時留原本的牌', () => {
+    const one = passWindow(act('p3', 'exchange', withCards(started(3).state, 2, [true, false])));
+    expect(prompts(one.events, 'keepCard').at(-1)!.options).toHaveLength(3);
+    expect(keep('p3', [1], one.state).state.phase).toBe('action');
+    const s = exchanging();
+    expect(keep('p1', [2], s.state).state.phase).toBe('exchange');
+    const after = run([{ type: 'timeout', id: lastTimer(s.events).id }], s.state);
+    expect(after.state.players[2].cards.map((x) => x.role)).toEqual(['assassin', 'assassin']);
+  });
+});
