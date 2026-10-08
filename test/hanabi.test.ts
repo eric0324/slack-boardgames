@@ -110,3 +110,30 @@ describe('hanabi/setup: 看牌', () => {
     expect(state.players[0].hand).toHaveLength(5);
   });
 });
+
+const play = (user: string, index: number, s: HState) => run([{ type: 'play', user, index }], s);
+// 2 人局：p2 先，p2 手牌 紅3 紅3 紅4 紅4 紅5；p1 手牌 紅1 紅1 紅1 紅2 紅2；牌堆最上面是黃 1
+describe('hanabi/turns: 出牌', () => {
+  it('出牌成功：放上煙火，補一張牌到最後，換下一位', () => {
+    const s = { ...started(2).state, turn: 0 };
+    const { state, events } = play('p1', 0, s);
+    expect(state.fireworks.red).toBe(1);
+    expect(state.players[0].hand.map((x) => `${x.color}${x.n}`)).toEqual(['red1', 'red1', 'red2', 'red2', 'yellow1']);
+    expect(announces(events).join('\n')).toContain('<@p1> 打出 🟥1，成功');
+    expect(state.turn).toBe(1);
+  });
+
+  it('出牌失誤：失誤次數加 1，牌進棄牌堆', () => {
+    const { state, events } = play('p2', 0, started(2).state);
+    expect(state).toMatchObject({ fuses: 1, discard: [{ color: 'red', n: 3 }] });
+    expect(state.fireworks.red).toBe(0);
+    expect(announces(events).join('\n')).toContain('失誤');
+  });
+
+  it('完成某個顏色的 5：提示標記不滿 8 就加回 1 個', () => {
+    const s = { ...started(2).state, fireworks: { red: 4, yellow: 0, green: 0, blue: 0, white: 0 }, hints: 5 };
+    const { state } = play('p2', 4, s);
+    expect(state.fireworks.red).toBe(5);
+    expect(state.hints).toBe(6);
+  });
+});

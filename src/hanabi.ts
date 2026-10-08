@@ -38,6 +38,7 @@ export interface HState {
   fireworks: Record<Color, number>;
   hints: number;
   fuses: number;
+  discard: HCard[];
   turn: number;
   timerSeq: number;
   timers: { phase?: number };
@@ -52,6 +53,7 @@ export type HAction =
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'peek'; user: string }
+  | { type: 'play'; user: string; index: number }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<HAction, { type: 'new' }>;
@@ -146,6 +148,41 @@ function peek(c: Ctx, user: string) {
   return reply(c, user, `👀 別人的手牌：\n${others.join('\n')}\n\n你的手牌（已知的提示）：\n${mine}`);
 }
 
+const currentId = (s: HState) => s.players[s.turn].id;
+
+// 從手牌拿出一張，牌堆還有就補一張到最後
+function takeCard(s: HState, p: HPlayer, index: number) {
+  const [card] = p.hand.splice(index, 1);
+  if (s.deck.length) p.hand.push(s.deck.shift()!);
+  return card;
+}
+
+function playCard(c: Ctx, user: string, index: number): boolean {
+  const s = c.s;
+  if (s.phase !== 'turn' || user !== currentId(s)) return reply(c, user, '還沒輪到你。');
+  const p = s.players[s.turn];
+  if (!p.hand[index]) return false;
+  const card = takeCard(s, p, index);
+  if (s.fireworks[card.color] + 1 === card.n) {
+    s.fireworks[card.color] = card.n;
+    const bonus = card.n === 5 && s.hints < MAX_HINTS;
+    if (bonus) s.hints++;
+    c.events.push({ type: 'announce', text: `🎆 ${mention(user)} 打出 ${show(card)}，成功！${bonus ? '完成這個顏色，提示標記加回 1 個。' : ''}` });
+  } else {
+    s.fuses++;
+    s.discard.push(card);
+    c.events.push({ type: 'announce', text: `💥 ${mention(user)} 打出 ${show(card)}，失誤！（${s.fuses}／${MAX_FUSES}）` });
+  }
+  endTurn(c);
+  return true;
+}
+
+function endTurn(c: Ctx) {
+  const s = c.s;
+  s.turn = (s.turn + 1) % s.players.length;
+  startTurn(c);
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -196,6 +233,8 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'peek':
       if (s.phase === 'lobby') return false;
       return peek(c, action.user);
+    case 'play':
+      return playCard(c, action.user, action.index);
     case 'timeout':
       return false;
   }
@@ -225,6 +264,7 @@ function createLobby(prev: HState | undefined, host: string, channel: string): R
     fireworks: { red: 0, yellow: 0, green: 0, blue: 0, white: 0 },
     hints: MAX_HINTS,
     fuses: 0,
+    discard: [],
     turn: 0,
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
