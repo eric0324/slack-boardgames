@@ -1,6 +1,6 @@
 // 機密代號遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyCodenames(state, action, rng) → { state, events }。
 import { CODENAMES_WORDS } from './codenamesWords.js';
-import { mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_CODENAMES_PLAYERS = 4;
 export const MAX_CODENAMES_PLAYERS = 12;
@@ -40,6 +40,7 @@ export interface CState {
   turn: Team;
   clue?: { word: string; count: number };
   guessed: number; // 這回合已經翻了幾張
+  winner?: Team;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -56,9 +57,10 @@ export type CAction =
   | { type: 'guess'; user: string; index: number }
   | { type: 'endGuess'; user: string }
   | { type: 'skipTurn'; user: string }
-  | { type: 'timeout'; id: number };
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<CAction, { type: 'new' }>;
+type GameAction = Exclude<CAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: CState;
@@ -212,13 +214,42 @@ function guessCard(c: Ctx, user: string, index: number): boolean {
   if (p.team !== s.turn) return reply(c, user, '現在不是你們隊猜牌。');
   card.revealed = true;
   s.guessed++;
-  c.events.push({ type: 'announce', text: `${mention(user)} 翻開「${card.word}」：${COLOR_NAME[card.color]}` }, boardEvent(s));
+  c.events.push({ type: 'announce', text: `${mention(user)} 翻開「${card.word}」：${COLOR_NAME[card.color]}` });
+  if (card.color === 'assassin') {
+    c.events.push({ type: 'announce', text: `💀 ${TEAM_NAME[s.turn]}翻到刺客了！` });
+    endGame(c, other(s.turn));
+    return true;
+  }
+  const done = (['red', 'blue'] as Team[]).find((t) => left(s, t) === 0);
+  if (done) {
+    endGame(c, done);
+    return true;
+  }
+  c.events.push(boardEvent(s));
   if (card.color !== s.turn) endTurn(c);
   else if (s.guessed >= s.clue!.count + 1) {
     c.events.push({ type: 'announce', text: `✋ 已經猜滿 ${s.guessed} 張，換對方。` });
     endTurn(c);
   }
   return true;
+}
+
+// 結束：牌桌全部翻開，公告獲勝隊伍和兩隊成員
+function endGame(c: Ctx, winner: Team) {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  const members = (t: Team) =>
+    `${EMOJI[t]} ${TEAM_NAME[t]}：${s.players
+      .filter((p) => p.team === t)
+      .map((p) => `${mention(p.id)}${p.spymaster ? '（隊長）' : ''}`)
+      .join('、')}`;
+  c.events.push(
+    boardEvent(s, true),
+    { type: 'announce', text: `🎉 遊戲結束，${TEAM_NAME[winner]}獲勝！\n${members('red')}\n${members('blue')}`, gif: 'goodWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -303,6 +334,15 @@ export function applyCodenames(state: CState | undefined, action: CAction, rng: 
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }

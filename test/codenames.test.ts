@@ -253,3 +253,53 @@ describe('codenames/turns: 猜牌', () => {
     expect(ephemeralTo(run([{ type: 'skipTurn', user: 'p2' }], g.state).events, 'p2')).toBeDefined();
   });
 });
+
+const revealed = (s: CState, indexes: number[]): CState => ({
+  ...s,
+  cards: s.cards.map((x, i) => (indexes.includes(i) ? { ...x, revealed: true } : x)),
+});
+
+describe('codenames/win-condition: 勝負判定', () => {
+  it('翻到刺客：翻的那隊輸', () => {
+    const { state, events } = guess([24], guessing().state);
+    expect(state).toMatchObject({ phase: 'ended', winner: 'red' });
+    expect(announces(events).join('\n')).toContain('刺客');
+  });
+
+  it('自己隊的牌全部翻開：獲勝', () => {
+    const s = revealed(guessing().state, [0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(guess([8], s).state).toMatchObject({ phase: 'ended', winner: 'blue' });
+  });
+
+  it('對方幫忙翻完：對方獲勝', () => {
+    const s = revealed(guessing().state, [9, 10, 11, 12, 13, 14, 15]);
+    expect(guess([16], s).state).toMatchObject({ phase: 'ended', winner: 'red' });
+  });
+});
+
+describe('codenames/win-condition: 結束公開與再來一局', () => {
+  const ended = () => guess([24], guessing().state);
+
+  it('牌桌全部翻開，公告獲勝隊伍和兩隊成員，貼出再來一局', () => {
+    const { state, events } = ended();
+    const board = boards(events).at(-1)!;
+    expect(board.rows.flat().map((b) => b.label)).toEqual(
+      state.cards.map((x) => `${{ red: '🟥', blue: '🟦', neutral: '⬜', assassin: '💀' }[x.color]}${x.word}`),
+    );
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('紅隊獲勝');
+    expect(text).toContain('<@p1>');
+    expect(text).toContain('<@p4>');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'prompt', kind: 'rematch' }));
+  });
+
+  it('再來一局：上一局的玩家可以開新房間，其他人不行；取消的遊戲不能', () => {
+    const s = ended().state;
+    const again = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], s);
+    expect(again.state).toMatchObject({ phase: 'lobby', host: 'p3', players: [{ id: 'p3' }] });
+    expect(again.state.timerSeq).toBe(s.timerSeq);
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], s).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(4).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
