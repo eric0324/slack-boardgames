@@ -12,7 +12,7 @@
 
 ## 3. Slack adapter 與文件
 
-- [ ] 3.1 adapter 註冊一字千金：指令與說明、遊戲清單、按鈕、計時
+- [x] 3.1 adapter 註冊一字千金：指令與說明、遊戲清單、按鈕、計時
 - [ ] 3.2 manifest usage hint、README、wiki
 
 ## 4. 整合驗證

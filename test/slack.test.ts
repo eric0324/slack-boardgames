@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseJustOneCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -826,5 +826,47 @@ describe('game-commands: 吹牛骰', () => {
     expect(parseLiarsDiceCommand('bid 3', 'U1', 'C1')).toBeNull();
     expect(parseLiarsDiceCommand('addbot 2', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 2 });
     expect(parseLiarsDiceCommand('next', 'U1', 'C1')).toBeNull();
+  });
+});
+
+describe('game-commands: 一字千金', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game 清單有一字千金；/game justone help 列出指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    for (const s of ['一字千金', 'justone', '3～7 人', '/game justone new']) expect(lastEph(calls).text).toContain(s);
+    await host.game('C1', 'U1', 'alice', 'justone help');
+    for (const s of ['new', 'start', 'clue', 'guess', 'next', 'cancel']) expect(lastEph(calls).text).toContain(`/game justone ${s}`);
+  });
+
+  it('開房、開始、私訊詞、給提示、猜詞、跳過按鈕、計時都交給一字千金', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'justone new');
+    expect(calls.at(-1)!.args.text).toContain('一字千金房間');
+    for (const u of ['U2', 'U3']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    const word = host.justOneGames.get('C1')!.word!;
+    expect(calls.some((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1' && String(c.args.text).includes(word))).toBe(true);
+    await host.game('C1', 'U1', 'U1', 'justone clue 牛頓');
+    await host.game('C1', 'U2', 'U2', 'justone clue 紅色');
+    expect(host.justOneGames.get('C1')!.phase).toBe('guess');
+    await host.game('C1', 'U3', 'U3', `justone guess ${word}`);
+    expect(host.justOneGames.get('C1')).toMatchObject({ score: 1, card: 2 });
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.justOneGames.get('C1')!.phase).toBe('guess');
+    await host.button('ww:skipGuess:0', 'C1|U1', 'U1', 'U1');
+    expect(host.justOneGames.get('C1')!.card).toBe(3);
+  });
+
+  it('指令解析', () => {
+    expect(parseJustOneCommand('clue 牛頓', 'U1', 'C1')).toEqual({ type: 'clue', user: 'U1', word: '牛頓' });
+    expect(parseJustOneCommand('clue 水 果', 'U1', 'C1')).toEqual({ type: 'clue', user: 'U1', word: '水 果' });
+    expect(parseJustOneCommand('guess 蘋果', 'U1', 'C1')).toEqual({ type: 'guess', user: 'U1', word: '蘋果' });
+    expect(parseJustOneCommand('next', 'U1', 'C1')).toEqual({ type: 'skipStep', user: 'U1' });
+    expect(parseJustOneCommand('clue', 'U1', 'C1')).toBeNull();
   });
 });
