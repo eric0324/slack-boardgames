@@ -280,8 +280,15 @@ function handle(c: Ctx, action: GameAction): boolean {
       return discardCard(c, action.user, action.index);
     case 'hint':
       return giveHint(c, action.user, action.target, action.color, action.number);
-    case 'timeout':
-      return false;
+    case 'timeout': {
+      if (action.id !== s.timers.phase || s.phase !== 'turn') return false;
+      const me = currentId(s);
+      c.events.push({ type: 'announce', text: `⌛ ${mention(me)} 時間到了，系統代為行動。` });
+      if (s.hints < MAX_HINTS) return discardCard(c, me, 0);
+      const next = s.players[(s.turn + 1) % s.players.length];
+      const card = next.hand[Math.floor(c.rng() * next.hand.length)];
+      return c.rng() < 0.5 ? giveHint(c, me, next.id, card.color) : giveHint(c, me, next.id, undefined, card.n);
+    }
   }
 }
 

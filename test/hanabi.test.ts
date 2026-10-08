@@ -188,3 +188,24 @@ describe('hanabi/turns: 提示', () => {
     }
   });
 });
+
+const lastTimer = (events: GameEvent[]) => (events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[]).at(-1)!;
+describe('hanabi/turns: 回合與計時', () => {
+  it('只有輪到的人能出牌、棄牌、給提示', () => {
+    const s = { ...started(2).state, hints: 5 };
+    for (const res of [play('p1', 0, s), discard('p1', 0, s), hint('p1', 'p2', { color: 'red' }, s)]) {
+      expect(res.state.turn).toBe(1);
+      expect(ephemeralTo(res.events, 'p1')).toMatchObject({ text: expect.stringContaining('還沒輪到你') });
+    }
+  });
+
+  it('每回合 2 分鐘；超時：標記不滿 8 就棄第 1 張，滿 8 就對下一位隨機給一個有效的提示', () => {
+    const st = started(2);
+    expect(lastTimer(st.events).ms).toBe(120_000);
+    const discarded = run([{ type: 'timeout', id: lastTimer(st.events).id }], { ...st.state, hints: 5 });
+    expect(discarded.state).toMatchObject({ hints: 6, discard: [{ color: 'red', n: 3 }] });
+    const hinted = run([{ type: 'timeout', id: lastTimer(st.events).id }], st.state);
+    expect(hinted.state.hints).toBe(7);
+    expect(announces(hinted.events).join('\n')).toContain('<@p2> 提示 <@p1>');
+  });
+});
