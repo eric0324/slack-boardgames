@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseAvalonCommand, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -476,7 +476,7 @@ describe('game-commands: /game 指令與多款遊戲', () => {
     const { host, calls } = setup();
     await host.game('C1', 'U1', 'alice', '');
     const text = lastEph(calls).text;
-    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new', '間諜危機', 'spyfall', '4～10 人', '/game spyfall new']) {
+    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new', '間諜危機', 'spyfall', '4～10 人', '/game spyfall new', '阿瓦隆', 'avalon', '5～10 人', '/game avalon new']) {
       expect(text).toContain(s);
     }
   });
@@ -625,5 +625,85 @@ describe('game-commands: 間諜危機', () => {
     expect(parseSpyfallCommand('addbot 2', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 2 });
     expect(parseSpyfallCommand('guess', 'U1', 'C1')).toBeNull();
     expect(parseSpyfallCommand('dance', 'U1', 'C1')).toBeNull();
+  });
+});
+
+describe('game-commands: 阿瓦隆', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game avalon new 開阿瓦隆的房間，按鈕加入會更新公告', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'avalon new');
+    expect(calls.at(-1)!.args.text).toContain('阿瓦隆房間');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.avalonGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+  });
+
+  it('/game avalon help 列出阿瓦隆的指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'avalon help');
+    const text = lastEph(calls).text;
+    for (const s of ['new', 'addbot', 'removebot', 'start', 'next', 'cancel']) expect(text).toContain(`/game avalon ${s}`);
+  });
+
+  it('一個頻道同時只有一局：阿瓦隆和其他遊戲互相擋', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'avalon new');
+    await host.game('C1', 'U2', 'bob', 'spyfall new');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    const other = setup();
+    await other.host.game('C2', 'U1', 'alice', 'werewolf new');
+    await other.host.game('C2', 'U2', 'bob', 'avalon new');
+    expect(lastEph(other.calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    expect(other.host.avalonGames.has('C2')).toBe(false);
+  });
+
+  it('開始、身分私訊、壞人群組、發言、選人、投票、出任務、計時都交給阿瓦隆', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'avalon new');
+    for (const u of ['U2', 'U3', 'U4', 'U5']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && String(c.args.text).includes('你是梅林'))).toBe(true);
+    expect(calls.some((c) => c.method === 'conversations.open' && c.args.users === 'U4,U5')).toBe(true);
+    for (const u of ['U1', 'U2', 'U3', 'U4', 'U5']) await host.button('ww:endSpeech:0', `C1|${u}`, u, u);
+    expect(host.avalonGames.get('C1')!.phase).toBe('pick');
+    await host.button('ww:pickMember:0', 'C1|U1', 'U5', 'U5');
+    await host.button('ww:pickMember:1', 'C1|U2', 'U5', 'U5');
+    await host.button('ww:confirmTeam:0', 'C1|confirm', 'U5', 'U5');
+    for (const u of ['U1', 'U2', 'U3', 'U4', 'U5']) await host.button('ww:teamVote:0', 'C1|approve', u, u);
+    expect(host.avalonGames.get('C1')!.phase).toBe('quest');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1' && String(c.args.text).includes('任務 1'))).toBe(true);
+    await host.button('ww:quest:0', 'C1|success', 'U1', 'U1');
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.avalonGames.get('C1')!.results).toEqual(['success']);
+  });
+
+  it('刺殺按鈕貼在壞人群組，刺客按下後結束', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'avalon new');
+    for (const u of ['U2', 'U3', 'U4', 'U5']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    // 沒人操作：投票算贊成、任務算成功 → 3 個任務成功後進入刺殺
+    for (let i = 0; i < 100 && host.avalonGames.get('C1')!.phase !== 'assassinate'; i++) {
+      timers.at(-1)!.fn();
+      await host.idle();
+    }
+    expect(host.avalonGames.get('C1')!.phase).toBe('assassinate');
+    const post = calls.filter((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U4,U5').at(-1)!;
+    expect(buttonsOf(post).map((b: any) => b.action_id)).toEqual(['ww:assassinate:0', 'ww:assassinate:1', 'ww:assassinate:2']);
+    await host.button('ww:assassinate:0', 'C1|U1', 'U4', 'U4');
+    expect(host.avalonGames.get('C1')).toMatchObject({ phase: 'ended', winner: 'evil' });
+  });
+
+  it('指令解析：next、addbot；沒有 vote 和 guess', () => {
+    expect(parseAvalonCommand('next', 'U1', 'C1')).toEqual({ type: 'skipSpeaker', user: 'U1' });
+    expect(parseAvalonCommand('addbot 4', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 4 });
+    expect(parseAvalonCommand('vote', 'U1', 'C1')).toBeNull();
+    expect(parseAvalonCommand('guess x', 'U1', 'C1')).toBeNull();
   });
 });

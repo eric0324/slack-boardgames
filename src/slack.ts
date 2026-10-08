@@ -2,10 +2,11 @@
 import { applyAction, isBot, MAX_PLAYERS, mention, RULES_URL, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
 import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
+import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -46,7 +47,8 @@ const GAME_LIST = [
   '• 🐺 *狼人殺*（`werewolf`）：6～12 人，開房 `/game werewolf new`（或 `/werewolf new`）',
   '• 🕵️ *誰是臥底*（`undercover`）：4～12 人，開房 `/game undercover new`',
   '• 📍 *間諜危機*（`spyfall`）：4～10 人，開房 `/game spyfall new`',
-  '各遊戲的指令：`/game werewolf help`、`/game undercover help`、`/game spyfall help`',
+  '• 🏰 *阿瓦隆*（`avalon`）：5～10 人，開房 `/game avalon new`',
+  '各遊戲的指令：`/game werewolf help`、`/game undercover help`、`/game spyfall help`、`/game avalon help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -73,6 +75,18 @@ const SPYFALL_HELP = [
   '• `/game spyfall vote`：結束提問，直接投票（房主）',
   '• `/game spyfall cancel`：取消遊戲（房主）',
   '• `/game spyfall guess <地點>`：間諜猜地點（提問期間一次，或被指控後 60 秒內）',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const AVALON_HELP = [
+  '*阿瓦隆指令*',
+  '• `/game avalon new`：開房（任何人）',
+  '• `/game avalon addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game avalon removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game avalon start`：開始遊戲，需要 5～10 人（房主）',
+  '• `/game avalon next`：跳過目前的發言者（房主）',
+  '• `/game avalon cancel`：取消遊戲（房主）',
+  '選隊員、投票、出任務、刺殺都用按鈕',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -128,6 +142,35 @@ export function parseSpyfallCommand(text: string, user: string, channel: string)
   const action = parseUndercoverCommand(text, user, channel);
   if (action?.type === 'guess') return { type: 'guess', user, location: action.word };
   return action as SAction | null;
+}
+
+// 阿瓦隆的子指令：沒有 vote（組隊投票用按鈕）和 guess
+export function parseAvalonCommand(text: string, user: string, channel: string): AAction | null {
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || action.type === 'guess' || action.type === 'endDiscussion') return null;
+  return action as AAction;
+}
+
+function avalonButton(kind: string, value: string, user: string, channel: string): AAction | null {
+  switch (kind) {
+    case 'join':
+    case 'leave':
+    case 'start':
+    case 'endSpeech':
+    case 'confirmTeam':
+      return { type: kind, user };
+    case 'pickMember':
+    case 'assassinate':
+      return { type: kind, user, target: value };
+    case 'teamVote':
+      return value === 'approve' || value === 'reject' ? { type: 'teamVote', user, vote: value } : null;
+    case 'quest':
+      return value === 'success' || value === 'fail' ? { type: 'quest', user, card: value } : null;
+    case 'rematch':
+      return { type: 'rematch', user, channel };
+    default:
+      return null;
+  }
 }
 
 function spyfallButton(kind: string, value: string, user: string, channel: string): SAction | null {
@@ -213,6 +256,7 @@ export class GameHost {
   games = new Map<string, GameState>();
   undercoverGames = new Map<string, UState>();
   spyfallGames = new Map<string, SState>();
+  avalonGames = new Map<string, AState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private names = new Map<string, string>();
@@ -247,6 +291,8 @@ export class GameHost {
     if (u && u.phase !== 'ended') return 'undercover';
     const sp = this.spyfallGames.get(channel);
     if (sp && sp.phase !== 'ended') return 'spyfall';
+    const av = this.avalonGames.get(channel);
+    if (av && av.phase !== 'ended') return 'avalon';
     return null;
   }
 
@@ -268,6 +314,7 @@ export class GameHost {
     if (g === 'werewolf') return this.command(channel, user, userName, restText);
     if (g === 'undercover') return this.undercover(channel, user, restText);
     if (g === 'spyfall') return this.spyfall(channel, user, restText);
+    if (g === 'avalon') return this.avalon(channel, user, restText);
     if (g === 'stats') return this.showStats(channel, user, restText);
     return this.reply(channel, user, GAME_LIST);
   }
@@ -299,6 +346,14 @@ export class GameHost {
     return this.dispatchSpyfall(channel, action);
   }
 
+  // `/game avalon <子指令>`
+  private avalon(channel: string, user: string, text: string): Promise<void> {
+    const action = parseAvalonCommand(text, user, channel);
+    if (!action) return this.reply(channel, user, AVALON_HELP);
+    if (this.blocked(channel, 'avalon')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    return this.dispatchAvalon(channel, action);
+  }
+
   button(actionId: string, value: string, user: string, userName: string): Promise<void> {
     this.names.set(user, userName);
     const kind = actionId.split(':')[1];
@@ -311,6 +366,10 @@ export class GameHost {
     if (this.lastKind.get(channel) === 'spyfall') {
       const sp = spyfallButton(kind, value.slice(sep + 1), user, channel);
       return sp ? this.dispatchSpyfall(channel, sp) : Promise.resolve();
+    }
+    if (this.lastKind.get(channel) === 'avalon') {
+      const av = avalonButton(kind, value.slice(sep + 1), user, channel);
+      return av ? this.dispatchAvalon(channel, av) : Promise.resolve();
     }
     const action = buttonAction(kind, value.slice(sep + 1), user, channel);
     return action ? this.dispatch(channel, action) : Promise.resolve();
@@ -356,6 +415,15 @@ export class GameHost {
       this.lastKind.set(channel, 'spyfall');
     }
     return this.deliver(channel, events, 'spyfall');
+  }
+
+  dispatchAvalon(channel: string, action: AAction): Promise<void> {
+    const { state, events } = applyAvalon(this.avalonGames.get(channel), action, this.rng);
+    if (state) {
+      this.avalonGames.set(channel, state);
+      this.lastKind.set(channel, 'avalon');
+    }
+    return this.deliver(channel, events, 'avalon');
   }
 
   // 依序送出，避免同一局的訊息順序錯亂
@@ -410,6 +478,7 @@ export class GameHost {
           const timeout = { type: 'timeout' as const, id: e.id };
           if (kind === 'undercover') void this.dispatchUndercover(channel, timeout);
           else if (kind === 'spyfall') void this.dispatchSpyfall(channel, timeout);
+          else if (kind === 'avalon') void this.dispatchAvalon(channel, timeout);
           else void this.dispatch(channel, timeout);
         }, e.ms);
         return;
