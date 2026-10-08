@@ -114,3 +114,27 @@ describe('justone/rounds: 給提示', () => {
     expect(run([{ type: 'timeout', id: lastTimer(st.events).id }], clue('p1', 'a', st.state).state).state.phase).toBe('guess');
   });
 });
+
+describe('justone/rounds: 刪除重複的提示', () => {
+  it('重複的提示全部刪掉，只公開留下的提示和給的人、被刪掉幾個', () => {
+    const { events } = clues([['p1', '水果'], ['p2', '水果'], ['p3', '牛頓']], started(4).state);
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('<@p3>「牛頓」');
+    expect(text).not.toContain('水果');
+    expect(text).toContain('2 個提示');
+  });
+
+  it('去掉前後空白、英文不分大小寫後相同就算重複；和答案相同的也刪掉', () => {
+    const s = started(4).state;
+    const { events } = clues([['p1', 'Apple'], ['p2', ' apple '], ['p3', s.word!]], s);
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('3 個提示');
+    expect(text).toContain('沒有留下任何提示');
+  });
+
+  it('公告後猜詞的人收到「跳過」按鈕', () => {
+    const { events } = clues([['p1', 'a'], ['p2', 'b'], ['p3', 'c']], started(4).state);
+    const p = events.find((e) => e.type === 'prompt' && e.kind === 'skipGuess') as Extract<GameEvent, { type: 'prompt' }>;
+    expect(p.options).toEqual([{ value: 'p4', label: '跳過' }]);
+  });
+});
