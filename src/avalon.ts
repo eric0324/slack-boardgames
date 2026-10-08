@@ -1,6 +1,6 @@
 // 阿瓦隆遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyAvalon(state, action, rng) → { state, events }。
 import { randomBotName } from './botLines.js';
-import { isBot, mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type GifKey, type Rng } from './engine.js';
 
 export const MIN_AVALON_PLAYERS = 5;
 export const MAX_AVALON_PLAYERS = 10;
@@ -258,15 +258,24 @@ function endTeamVote(c: Ctx) {
   c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
   if (approvals * 2 > s.players.length) {
     s.rejects = 0;
-    c.events.push({ type: 'announce', text: `✅ 隊伍通過（${approvals} 票贊成），${list(s.team)} 出任務！請到私訊選擇任務結果。` });
+    c.events.push({
+      type: 'announce',
+      text: `✅ 隊伍通過（${approvals} 票贊成），${list(s.team)} 出任務！請到私訊選擇任務結果。`,
+      gif: 'teamApproved',
+    });
     startQuest(c);
     return;
   }
   s.rejects++;
-  c.events.push({ type: 'announce', text: `❌ 隊伍被否決（${approvals} 票贊成），連續否決 ${s.rejects}／${MAX_REJECTS}。` });
-  if (s.rejects >= MAX_REJECTS) {
+  const ending = s.rejects >= MAX_REJECTS;
+  c.events.push({
+    type: 'announce',
+    text: `❌ 隊伍被否決（${approvals} 票贊成），連續否決 ${s.rejects}／${MAX_REJECTS}。`,
+    ...(ending ? {} : { gif: 'teamRejected' as const }),
+  });
+  if (ending) {
     c.events.push({ type: 'announce', text: `😈 連續 ${MAX_REJECTS} 次組隊都沒通過，王國陷入混亂！` });
-    endGame(c, 'evil');
+    endGame(c, 'evil', 'teamRejected');
     return;
   }
   nextLeader(c);
@@ -298,13 +307,16 @@ function endQuest(c: Ctx) {
   const needed = s.players.length >= 7 && s.quest === 3 ? 2 : 1;
   const result = fails >= needed ? 'fail' : 'success';
   s.results.push(result);
+  const count = (r: string) => s.results.filter((x) => x === r).length;
+  // 第 3 個成功（接著進入刺殺）或第 3 個失敗（遊戲結束）時，GIF 留給下一則公告
+  const decisive = count(result) >= 3;
   c.events.push({
     type: 'announce',
     text: `${result === 'success' ? '🎉' : '💥'} 任務 ${s.quest + 1} ${result === 'success' ? '成功' : '失敗'}（${fails} 張失敗票）`,
+    ...(decisive ? {} : { gif: result === 'success' ? ('questSuccess' as const) : ('questFail' as const) }),
   });
   s.quest++;
-  const count = (r: string) => s.results.filter((x) => x === r).length;
-  if (count('fail') >= 3) endGame(c, 'evil');
+  if (count('fail') >= 3) endGame(c, 'evil', 'questFail');
   else if (count('success') >= 3) startAssassination(c);
   else nextLeader(c);
 }
@@ -318,6 +330,7 @@ function startAssassination(c: Ctx) {
   c.events.push({
     type: 'announce',
     text: `🗡️ 好人完成了 3 個任務！但壞人還有最後機會：壞人是 ${list(evilIds)}，刺客正在和同伴討論要刺殺誰，刺中梅林壞人就逆轉獲勝。`,
+    gif: 'assassination',
   });
   c.events.push({
     type: 'prompt',
@@ -337,10 +350,10 @@ function assassinate(c: Ctx, target: string) {
   const assassin = mention(roleHolder(s, 'assassin'));
   if (target === roleHolder(s, 'merlin')) {
     c.events.push({ type: 'announce', text: `🎯 刺客 ${assassin} 刺殺了 ${mention(target)}——刺中梅林了！` });
-    endGame(c, 'evil');
+    endGame(c, 'evil', 'duelWin');
   } else {
     c.events.push({ type: 'announce', text: `😮 刺客 ${assassin} 刺殺了 ${mention(target)}，但 ${mention(target)} 不是梅林！` });
-    endGame(c, 'good');
+    endGame(c, 'good', 'duelLose');
   }
 }
 
@@ -353,8 +366,8 @@ const ROLE_NAME: Record<ARole, string> = {
   minion: '爪牙',
 };
 
-// 結束：公開獲勝陣營、每個人的身分和任務結果
-function endGame(c: Ctx, winner: 'good' | 'evil') {
+// 結束：公開獲勝陣營、每個人的身分和任務結果；gif 是造成結束的時刻的 GIF，取代勝利 GIF
+function endGame(c: Ctx, winner: 'good' | 'evil', gif?: GifKey) {
   const s = c.s;
   s.phase = 'ended';
   s.timers = {};
@@ -362,7 +375,7 @@ function endGame(c: Ctx, winner: 'good' | 'evil') {
   const title = winner === 'good' ? '🎉 遊戲結束，好人獲勝！' : '😈 遊戲結束，壞人獲勝！';
   const roster = s.players.map((p) => `${mention(p.id)}：${ROLE_NAME[p.role!]}`).join('\n');
   c.events.push(
-    { type: 'announce', text: `${title}\n任務結果：${progress(s)}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' },
+    { type: 'announce', text: `${title}\n任務結果：${progress(s)}\n${roster}`, gif: gif ?? (winner === 'good' ? 'goodWin' : 'wolvesWin') },
     { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
   );
 }
