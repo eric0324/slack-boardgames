@@ -61,4 +61,4 @@
 
 #### Scenario: 開始公告附上規則連結
 - **WHEN** 遊戲開始
-- **THEN** 頻道的開始公告裡有可以點的「遊戲規則」連結，指向 https://github.com/eric0324/slack-werewolve/wiki/遊戲規則
+- **THEN** 頻道的開始公告裡有可以點的「遊戲規則」連結，指向 https://github.com/eric0324/slack-boardgames/wiki/遊戲規則

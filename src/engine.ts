@@ -47,7 +47,7 @@ export const mention = (id: string) => {
   return `🤖${name ?? `Bot${n}`}`;
 };
 
-export const RULES_URL = encodeURI('https://github.com/eric0324/slack-werewolve/wiki/遊戲規則');
+export const RULES_URL = encodeURI('https://github.com/eric0324/slack-boardgames/wiki/遊戲規則');
 export const ACTION_MS = 60_000;
 const WOLF_REMIND_BEFORE_MS = 30_000;
 export const SPEECH_MS = 40_000; // 輪流發言每人的時間

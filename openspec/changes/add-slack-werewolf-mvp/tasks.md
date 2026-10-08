@@ -172,3 +172,7 @@
 ## 35. 部署到 Google Cloud
 
 - [x] 35.1 新增 `deploy/setup.sh`（安裝 Node 22、swap、系統帳號、下載程式、systemd）、`deploy/update.sh`、`deploy/werewolf.service`，README 加上 Google Cloud e2-micro 的部署步驟；確認 script 語法檢查通過（部署工具，不影響遊戲行為，沒有 spec 變更）
+
+## 36. 專案改名為 slack-boardgames
+
+- [x] 36.1 GitHub repo 改名為 `slack-boardgames`，程式和文件裡的連結（wiki 規則連結、使用說明、README、安裝 script）、package.json 名稱、Slack App 顯示名稱都改成新名字；slash command 維持 `/werewolf`；確認規則連結相關測試通過

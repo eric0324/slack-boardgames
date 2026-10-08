@@ -1,8 +1,12 @@
-# Slack 狼人殺 bot
+# Slack Boardgames
 
-在 Slack 頻道裡玩文字版狼人殺，由 bot 擔任主持人。支援 6～12 人，角色有狼人、狼王、村民、預言家、女巫、騎士，採用屠邊規則。
+在 Slack 頻道裡玩桌遊，由 bot 擔任主持人。
 
-玩法和指令請看 [wiki](https://github.com/eric0324/slack-werewolve/wiki)：[遊戲規則](https://github.com/eric0324/slack-werewolve/wiki/遊戲規則)、[指令](https://github.com/eric0324/slack-werewolve/wiki/指令)。
+目前支援的遊戲：
+
+- **狼人殺**（`/werewolf`）：6～12 人，角色有狼人、狼王、村民、預言家、女巫、騎士，採用屠邊規則；人不夠時可以加 bot 補位
+
+玩法和指令請看 [wiki](https://github.com/eric0324/slack-boardgames/wiki)：[遊戲規則](https://github.com/eric0324/slack-boardgames/wiki/遊戲規則)、[指令](https://github.com/eric0324/slack-boardgames/wiki/指令)。
 
 ## 建立 Slack App
 
@@ -10,10 +14,10 @@
 
    ```yaml
    display_information:
-     name: Werewolf
+     name: Boardgames
    features:
      bot_user:
-       display_name: werewolf
+       display_name: boardgames
        always_online: true
      slash_commands:
        - command: /werewolf
@@ -60,7 +64,7 @@ bot 會讀取遊戲頻道裡真人打的字（例如「我是預言家，查殺 
 
 戰績會存在 `data/stats.db`（SQLite），可以用環境變數 `STATS_DB` 改位置；換電腦跑 bot 時記得一起搬過去。
 
-最後把 bot 邀請進要玩的頻道（`/invite @werewolf`），輸入 `/werewolf new` 就能開房。
+最後把 bot 邀請進要玩的頻道（`/invite @boardgames`），輸入 `/werewolf new` 就能開房。
 
 ## 部署到 Google Cloud（免費的 e2-micro）
 
@@ -75,7 +79,7 @@ bot 用 Socket Mode 主動連 Slack，不需要公開網址，只要一台一直
 3. 建好後按 **SSH** 連進主機，執行：
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/eric0324/slack-werewolve/main/deploy/setup.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/eric0324/slack-boardgames/main/deploy/setup.sh | bash
    ```
 
 4. 填入 token 並啟動：
