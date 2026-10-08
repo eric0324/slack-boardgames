@@ -4,7 +4,6 @@
 set -euo pipefail
 APP_DIR=/opt/werewolf/app
 sudo -u werewolf git -C "$APP_DIR" pull --ff-only
-cd "$APP_DIR"
-sudo -u werewolf npm ci
+sudo -u werewolf bash -c "cd '$APP_DIR' && npm ci"
 sudo systemctl restart werewolf
 echo "更新完成。看 log：sudo journalctl -u werewolf -f"

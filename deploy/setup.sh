@@ -29,16 +29,16 @@ if [ -d "$APP_DIR/.git" ]; then
 else
   sudo -u werewolf git clone "$REPO" "$APP_DIR"
 fi
-cd "$APP_DIR"
-sudo -u werewolf npm ci
+# /opt/werewolf 的權限是 750，只有 werewolf 帳號能進去，所以要用 werewolf 身分執行
+sudo -u werewolf bash -c "cd '$APP_DIR' && npm ci"
 
 echo "==> 設定 systemd"
-sudo cp deploy/werewolf.service /etc/systemd/system/werewolf.service
+sudo cp "$APP_DIR/deploy/werewolf.service" /etc/systemd/system/werewolf.service
 sudo systemctl daemon-reload
 sudo systemctl enable werewolf
 
-if [ ! -f "$APP_DIR/.env" ]; then
-  sudo -u werewolf cp .env.example .env
+if ! sudo test -f "$APP_DIR/.env"; then
+  sudo -u werewolf cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   sudo chmod 600 "$APP_DIR/.env"
   echo
   echo "安裝完成。接下來："
