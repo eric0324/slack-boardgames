@@ -22,7 +22,7 @@
 ## 5. Slack adapter 與文件
 
 - [x] 5.1 adapter 加入阿瓦隆：狀態 Map、`/game avalon` 指令與說明、遊戲清單、按鈕（pickMember、confirmTeam、teamVote、quest、assassinate）、私訊與壞人群組、計時、一個頻道一局
-- [ ] 5.2 manifest usage hint、README、wiki（首頁、入口頁、規則頁、指令頁、側邊欄）
+- [x] 5.2 manifest usage hint、README、wiki（首頁、入口頁、規則頁、指令頁、側邊欄）
 
 ## 6. 整合驗證
 
