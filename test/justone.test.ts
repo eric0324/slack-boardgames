@@ -184,3 +184,36 @@ describe('justone/rounds: 猜詞與計分', () => {
     expect(ephemeralTo(run([{ type: 'skipStep', user: 'p2' }], guessing()).events, 'p2')).toBeDefined();
   });
 });
+
+describe('justone/rounds: 結束與評價', () => {
+  const finish = (score: number) => run([{ type: 'skipGuess', user: 'p4' }], { ...guessing(), deck: [], score });
+
+  it.each([
+    [13, '完美'],
+    [12, '驚人'],
+    [11, '太厲害了'],
+    [10, '很棒'],
+    [9, '很棒'],
+    [8, '不錯'],
+    [7, '不錯'],
+    [6, '還可以'],
+    [4, '還可以'],
+    [3, '再試一次'],
+    [0, '再試一次'],
+  ])('牌堆用完：%i 分「%s」', (score, rating) => {
+    const { state, events } = finish(score);
+    expect(state).toMatchObject({ phase: 'ended', score });
+    const text = announces(events).at(-1)!;
+    expect(text).toContain(`${score} 分`);
+    expect(text).toContain(rating);
+  });
+
+  it('貼出再來一局；上一局的玩家可以開新房間；取消的遊戲不能', () => {
+    const { state, events } = finish(5);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'prompt', kind: 'rematch' }));
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], state).state).toMatchObject({ phase: 'lobby', host: 'p2' });
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], state).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(4).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
