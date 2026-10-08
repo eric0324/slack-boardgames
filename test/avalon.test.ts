@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mention, type GameEvent } from '../src/engine.js';
-import { applyAvalon, type AAction, type AState } from '../src/avalon.js';
+import { applyAvalon, AVALON_BOT_LINES, isEvil, type AAction, type AState } from '../src/avalon.js';
 
 const rng = () => 0.99999;
 
@@ -433,5 +433,61 @@ describe('avalon/win-condition: 結束公開與再來一局', () => {
     expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
     const cancelled = run([{ type: 'cancel', user: 'p1' }], started(5).state).state;
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
+
+const withBots = (r: () => number) => run([{ type: 'addBot', user: 'p1', count: 4 }, { type: 'start', user: 'p1' }], lobbyWith(1).state, r);
+const isBotId = (id: string) => id.startsWith('bot:');
+const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+
+describe('avalon/bots: bot 的行動', () => {
+  it('bot 發言：說一句通用台詞後立刻換下一位', () => {
+    // rng 0：隊長是 p1，發言順序 bot1～bot4、最後 p1
+    const { state, events } = withBots(() => 0);
+    expect(state.speaker).toBe('p1');
+    const lines = announces(events).filter((t) => t.startsWith('🤖'));
+    expect(lines).toHaveLength(4);
+    for (const l of lines) expect(AVALON_BOT_LINES.some((x) => l.endsWith(x))).toBe(true);
+  });
+
+  it('bot 當隊長：隨機選滿隊伍並送出，壞人 bot 一定選自己；在隊伍裡的 bot 投贊成', () => {
+    let checked = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = seeded(seed);
+      let res = withBots(r);
+      for (let i = 0; i < 10 && res.state.phase === 'speech'; i++) res = applyAvalon(res.state, { type: 'endSpeech', user: 'p1' }, r);
+      const s = res.state;
+      const leader = s.players[s.leader];
+      if (!isBotId(leader.id) || s.phase !== 'teamVote') continue;
+      expect(s.team).toHaveLength(2);
+      if (isEvil(leader.role)) expect(s.team).toContain(leader.id);
+      for (const id of s.team.filter(isBotId)) expect(s.votes[id]).toBe('approve');
+      for (const p of s.players.filter((x) => isBotId(x.id))) expect(s.votes[p.id]).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('出任務：好人 bot 出成功，壞人 bot 出失敗', () => {
+    const { state } = withBots(() => 0);
+    const bots = state.players.filter((p) => isBotId(p.id));
+    const evilBot = bots.find((p) => isEvil(p.role))!;
+    const goodBot = bots.find((p) => !isEvil(p.role))!;
+    const picking1 = run([{ type: 'endSpeech', user: 'p1' }], state, () => 0).state;
+    const team = pick([evilBot.id, goodBot.id], picking1, 'p1').state;
+    const voting1 = run([{ type: 'confirmTeam', user: 'p1' }], team, () => 0).state;
+    const { events } = run([{ type: 'teamVote', user: 'p1', vote: 'approve' }], voting1, () => 0);
+    expect(announces(events).join('\n')).toContain('任務 1 失敗（1 張失敗票）');
+  });
+
+  it('1 位真人加 bot、真人什麼都不做，遊戲一定會結束', () => {
+    for (const bots of [4, 6, 9]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = seeded(seed);
+        let s = run([{ type: 'addBot', user: 'p1', count: bots }, { type: 'start', user: 'p1' }], lobbyWith(1).state, r).state;
+        for (let step = 0; step < 500 && s.phase !== 'ended'; step++) s = applyAvalon(s, { type: 'timeout', id: s.timers.phase! }, r).state;
+        expect(s.phase, `${bots} bots, seed ${seed}`).toBe('ended');
+      }
+    }
   });
 });

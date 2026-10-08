@@ -31,6 +31,20 @@ export interface APlayer {
   role?: ARole;
 }
 
+// bot 發言用的通用台詞
+export const AVALON_BOT_LINES = [
+  '我是好人，請相信我。',
+  '我覺得上一隊怪怪的，大家多注意一下。',
+  '這輪我想看隊長怎麼選人。',
+  '投票結果很有參考價值，大家回頭看看。',
+  '我沒有什麼特別的資訊，先聽大家說。',
+  '如果任務失敗，隊伍裡一定有壞人。',
+  '有人一直在反對，我覺得有點可疑。',
+  '我願意出任務，選我就對了。',
+  '先不要急著下結論。',
+  '這局好人要團結一點。',
+];
+
 // 人數 → [好人, 壞人]
 const TEAM_SIZES: Record<number, [number, number]> = { 5: [3, 2], 6: [4, 2], 7: [4, 3], 8: [5, 3], 9: [6, 3], 10: [6, 4] };
 const EVIL: ARole[] = ['assassin', 'morgana', 'minion'];
@@ -94,6 +108,8 @@ const lobbyEvent = (s: AState): GameEvent => ({
   players: s.players.map((p) => p.id),
   open: s.phase === 'lobby',
 });
+
+const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
 
 function shuffle<T>(items: T[], rng: Rng): T[] {
   const a = [...items];
@@ -175,7 +191,11 @@ function startRound(c: Ctx) {
 
 function nextSpeaker(c: Ctx) {
   const s = c.s;
-  const id = s.speakers.shift();
+  let id = s.speakers.shift();
+  while (id && isBot(id)) {
+    c.events.push({ type: 'announce', text: `${mention(id)}：${pick(AVALON_BOT_LINES, c.rng)}` });
+    id = s.speakers.shift();
+  }
   s.speaker = id;
   if (!id) {
     startPick(c);
@@ -352,6 +372,39 @@ function nextLeader(c: Ctx) {
   startRound(c);
 }
 
+// 找出下一個輪到 bot 的行動
+function nextBotAction(s: AState, rng: Rng): GameAction | null {
+  const roleOf = (id: string) => s.players.find((p) => p.id === id)!.role;
+  if (s.phase === 'pick') {
+    const leader = leaderOf(s);
+    if (!isBot(leader)) return null;
+    if (s.team.length >= teamSize(s)) return { type: 'confirmTeam', user: leader };
+    if (isEvil(roleOf(leader)) && !s.team.includes(leader)) return { type: 'pickMember', user: leader, target: leader };
+    const rest = s.players.map((p) => p.id).filter((id) => !s.team.includes(id));
+    return { type: 'pickMember', user: leader, target: pick(rest, rng) };
+  }
+  if (s.phase === 'teamVote') {
+    const voter = s.players.find((p) => isBot(p.id) && !s.votes[p.id]);
+    if (voter) return { type: 'teamVote', user: voter.id, vote: s.team.includes(voter.id) || rng() < 0.5 ? 'approve' : 'reject' };
+  }
+  if (s.phase === 'quest') {
+    const member = s.team.find((id) => isBot(id) && !s.cards[id]);
+    if (member) return { type: 'quest', user: member, card: isEvil(roleOf(member)) ? 'fail' : 'success' };
+  }
+  if (s.phase === 'assassinate') {
+    const assassin = roleHolder(s, 'assassin');
+    if (isBot(assassin)) return { type: 'assassinate', user: assassin, target: pick(goodIds(s), rng) };
+  }
+  return null;
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+  }
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -522,6 +575,7 @@ export function applyAvalon(state: AState | undefined, action: AAction, rng: Rng
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
+  if (changed) runBots(c);
   return { state: changed ? c.s : state, events: c.events };
 }
 
