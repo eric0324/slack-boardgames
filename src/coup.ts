@@ -8,8 +8,9 @@ const TITLE = '政變';
 const ACTION_MS = 60_000;
 const TARGET_MS = 30_000;
 const LOSE_MS = 30_000;
+const REACT_MS = 20_000;
 
-export type KPhase = 'lobby' | 'action' | 'target' | 'lose' | 'ended';
+export type KPhase = 'lobby' | 'action' | 'target' | 'challenge' | 'lose' | 'ended';
 export type ActKind = 'income' | 'foreignAid' | 'coup' | 'tax' | 'assassinate' | 'steal' | 'exchange';
 
 export type Role = 'duke' | 'assassin' | 'captain' | 'ambassador' | 'contessa';
@@ -44,7 +45,8 @@ export interface KState {
   turn: number;
   pending?: { actor: string; kind: ActKind; target?: string };
   losing: string[]; // 等著選要翻開哪張牌的玩家
-  after: 'next'; // 翻完牌之後要做什麼
+  after: 'next' | 'proceed' | 'execute' | 'blocked'; // 翻完牌之後要做什麼
+  claim?: { by: string; role: Role; forBlock: boolean }; // 等著被質疑的宣稱
   winner?: string;
   timerSeq: number;
   timers: { phase?: number };
@@ -61,6 +63,7 @@ export type KAction =
   | { type: 'act'; user: string; kind: ActKind }
   | { type: 'target'; user: string; target: string }
   | { type: 'reveal'; user: string; index: number }
+  | { type: 'challenge'; user: string }
   | { type: 'timeout'; id: number }
   | { type: 'rematch'; user: string; channel: string };
 
@@ -129,6 +132,7 @@ const ACT_LABEL: Record<ActKind, string> = {
   exchange: '🔄 交換（大使）',
 };
 const TARGETED: ActKind[] = ['coup', 'assassinate', 'steal'];
+const CLAIM: Partial<Record<ActKind, Role>> = { tax: 'duke', assassinate: 'assassin', steal: 'captain', exchange: 'ambassador' };
 
 const alive = (p: KPlayer) => p.cards.some((x) => !x.revealed);
 const current = (s: KState) => s.players[s.turn];
@@ -189,6 +193,11 @@ function declare(c: Ctx, user: string, kind: ActKind): boolean {
     nextTurn(c);
     return true;
   }
+  if (kind === 'tax' || kind === 'exchange') {
+    s.pending = { actor: p.id, kind };
+    openChallenge(c, p.id, CLAIM[kind]!, false, `${ACT_LABEL[kind]}`);
+    return true;
+  }
   if (TARGETED.includes(kind)) {
     s.phase = 'target';
     s.pending = { actor: p.id, kind };
@@ -216,8 +225,78 @@ function chooseTarget(c: Ctx, user: string, targetId: string): boolean {
     actor.coins -= 7;
     c.events.push({ type: 'announce', text: `💥 ${mention(user)} 付 7 枚金幣，對 ${mention(t.id)} 發動政變！` });
     loseInfluence(c, [t.id]);
+    return true;
   }
+  if (s.pending!.kind === 'assassinate') actor.coins -= 3;
+  openChallenge(c, user, CLAIM[s.pending!.kind]!, false, `對 ${mention(t.id)} ${ACT_LABEL[s.pending!.kind]}`);
   return true;
+}
+
+// 宣稱角色後的質疑視窗
+function openChallenge(c: Ctx, by: string, role: Role, forBlock: boolean, what: string) {
+  const s = c.s;
+  s.phase = 'challenge';
+  s.claim = { by, role, forBlock };
+  c.events.push(
+    { type: 'announce', text: `🎭 ${mention(by)} 宣稱「${ROLE_NAME[role]}」：${what}` },
+    {
+      type: 'prompt',
+      kind: 'challenge',
+      audience: 'channel',
+      text: `覺得 ${mention(by)} 沒有「${ROLE_NAME[role]}」的話，${REACT_MS / 1000} 秒內可以質疑`,
+      options: [{ value: 'challenge', label: '質疑' }],
+    },
+  );
+  startTimer(c, REACT_MS);
+}
+
+function resolveChallenge(c: Ctx, challenger: string) {
+  const s = c.s;
+  const { by, role, forBlock } = s.claim!;
+  const claimant = playerOf(s, by);
+  const card = claimant.cards.find((x) => !x.revealed && x.role === role);
+  if (card) {
+    s.deck.push(card.role);
+    s.deck = shuffle(s.deck, c.rng);
+    card.role = s.deck.shift()!;
+    c.events.push(
+      { type: 'announce', text: `✅ ${mention(by)} 真的有「${ROLE_NAME[role]}」！${mention(challenger)} 質疑失敗，${mention(by)} 把這張牌洗回牌堆換一張新的。` },
+      { type: 'dm', to: by, text: `🃏 你換到了新牌，現在的手牌：${cardList(claimant)}` },
+    );
+    loseInfluence(c, [challenger], forBlock ? 'blocked' : 'proceed');
+  } else {
+    c.events.push({ type: 'announce', text: `❌ ${mention(by)} 沒有「${ROLE_NAME[role]}」，${mention(challenger)} 質疑成功！` });
+    loseInfluence(c, [by], forBlock ? 'execute' : 'next');
+  }
+}
+
+// 行動沒被擋下來：執行效果
+function proceed(c: Ctx) {
+  execute(c);
+}
+
+function execute(c: Ctx) {
+  const s = c.s;
+  const { actor, kind, target } = s.pending!;
+  const p = playerOf(s, actor);
+  const t = target ? playerOf(s, target) : undefined;
+  if (kind === 'tax') {
+    p.coins += 3;
+    c.events.push({ type: 'announce', text: `👑 ${mention(actor)} 收稅，拿 3 枚金幣。` });
+  } else if (kind === 'foreignAid') {
+    p.coins += 2;
+    c.events.push({ type: 'announce', text: `🤲 ${mention(actor)} 拿了外援 2 枚金幣。` });
+  } else if (kind === 'steal' && t) {
+    const n = Math.min(2, t.coins);
+    t.coins -= n;
+    p.coins += n;
+    c.events.push({ type: 'announce', text: `🏴‍☠️ ${mention(actor)} 從 ${mention(t.id)} 勒索了 ${n} 枚金幣。` });
+  } else if (kind === 'assassinate' && t && alive(t)) {
+    c.events.push({ type: 'announce', text: `🗡️ ${mention(actor)} 刺殺 ${mention(t.id)}！` });
+    loseInfluence(c, [t.id]);
+    return;
+  }
+  nextTurn(c);
 }
 
 // 失去影響力：依序讓玩家選要翻開哪張牌
@@ -274,7 +353,12 @@ function afterLoss(c: Ctx) {
     endGame(c, living[0].id);
     return;
   }
-  nextTurn(c);
+  if (s.after === 'proceed') proceed(c);
+  else if (s.after === 'execute') execute(c);
+  else if (s.after === 'blocked') {
+    c.events.push({ type: 'announce', text: `🛡️ ${mention(s.pending!.actor)} 的行動被擋下來了。` });
+    nextTurn(c);
+  } else nextTurn(c);
 }
 
 function endGame(c: Ctx, winner: string) {
@@ -371,8 +455,22 @@ function handle(c: Ctx, action: GameAction): boolean {
       promptLose(c);
       return true;
     }
+    case 'challenge': {
+      if (s.phase !== 'challenge') return false;
+      const p = s.players.find((x) => x.id === action.user);
+      if (!p || !alive(p) || p.id === s.claim!.by) return false;
+      resolveChallenge(c, p.id);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'challenge') {
+        if (s.claim!.forBlock) {
+          s.after = 'blocked';
+          afterLoss(c);
+        } else proceed(c);
+        return true;
+      }
       if (s.phase === 'lose') {
         const p = playerOf(s, s.losing[0]);
         const cards = hidden(p);

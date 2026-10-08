@@ -213,3 +213,63 @@ describe('coup/turns: 勝負', () => {
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
   });
 });
+
+const challenge = (user: string, s: KState) => run([{ type: 'challenge', user }], s);
+const passWindow = (r: { state: KState; events: GameEvent[] }) => run([{ type: 'timeout', id: lastTimer(r.events).id }], r.state);
+
+// 3 人局：p1 公爵公爵、p2 公爵刺客、p3 刺客刺客；p3 先，接著 p1、p2
+describe('coup/turns: 質疑', () => {
+  it('宣稱角色的行動：公告宣稱，貼出 20 秒的質疑按鈕；沒人質疑就執行', () => {
+    const r = act('p3', 'tax', started(3).state);
+    expect(r.state.phase).toBe('challenge');
+    expect(announces(r.events).join('\n')).toContain('<@p3> 宣稱「公爵」');
+    expect(prompts(r.events, 'challenge').at(-1)!.options).toEqual([{ value: 'challenge', label: '質疑' }]);
+    expect(lastTimer(r.events).ms).toBe(20_000);
+    const after = passWindow(r);
+    expect(after.state.players[2].coins).toBe(5);
+    expect(after.state).toMatchObject({ phase: 'action', turn: 0 });
+  });
+
+  it('質疑成功：說謊的人失去一個影響力，行動失敗', () => {
+    const r = challenge('p1', act('p3', 'tax', started(3).state).state);
+    expect(announces(r.events).join('\n')).toContain('質疑成功');
+    expect(r.state).toMatchObject({ phase: 'lose', losing: ['p3'] });
+    const after = reveal('p3', 0, r.state);
+    expect(after.state.players[2].coins).toBe(2);
+    expect(after.state).toMatchObject({ phase: 'action', turn: 0 });
+  });
+
+  it('質疑失敗：翻給大家看、換一張新牌，質疑的人失去一個影響力，行動照常', () => {
+    const s = { ...started(3).state, turn: 1 };
+    const r = challenge('p1', act('p2', 'tax', s).state);
+    expect(announces(r.events).join('\n')).toContain('<@p2> 真的有「公爵」');
+    expect(r.state.deck).not.toEqual(s.deck);
+    expect(r.state.losing).toEqual(['p1']);
+    const after = reveal('p1', 0, r.state);
+    expect(after.state.players[1].coins).toBe(5);
+  });
+
+  it('刺殺：選目標時付 3 枚；質疑失敗的目標會先失去一張、再被刺殺', () => {
+    const s = coins(started(3).state, [2, 2, 3]);
+    const r = target('p3', 'p1', act('p3', 'assassinate', s).state);
+    expect(r.state.players[2].coins).toBe(0);
+    expect(r.state.phase).toBe('challenge');
+    const lost = challenge('p1', r.state);
+    const after = reveal('p1', 0, lost.state);
+    expect(after.state.players[0].cards.every((x) => x.revealed)).toBe(true);
+    expect(announces(after.events).join('\n')).toContain('<@p1> 出局');
+  });
+
+  it('勒索：從目標拿 2 枚（不足就拿光）', () => {
+    const s = coins(started(3).state, [1, 2, 2]);
+    expect(passWindow(target('p3', 'p2', act('p3', 'steal', s).state)).state.players.map((p) => p.coins)).toEqual([1, 0, 4]);
+    expect(passWindow(target('p3', 'p1', act('p3', 'steal', s).state)).state.players.map((p) => p.coins)).toEqual([0, 2, 3]);
+  });
+
+  it('宣稱的人自己、出局的人不能質疑', () => {
+    const r = act('p3', 'tax', started(3).state);
+    expect(challenge('p3', r.state).state.phase).toBe('challenge');
+    const dead = withCards(r.state, 0, [true, true]);
+    expect(challenge('p1', dead).state.phase).toBe('challenge');
+  });
+});
