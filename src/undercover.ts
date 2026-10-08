@@ -299,11 +299,11 @@ function finishGuess(c: Ctx, word: string | undefined) {
   continueGame(c);
 }
 
-// 臥底陣營（臥底＋白板）全部出局 → 平民勝；臥底陣營 ≥ 平民 → 臥底陣營勝
+// 臥底全部出局 → 平民勝（白板活著也一樣）；臥底陣營（臥底＋白板）≥ 平民 → 臥底陣營勝
 export function checkUndercoverWinner(players: UPlayer[]): 'civilian' | 'undercover' | null {
   const living = players.filter((p) => p.alive);
+  if (!living.some((p) => p.role === 'undercover')) return 'civilian';
   const undercoverSide = living.filter((p) => p.role !== 'civilian').length;
-  if (undercoverSide === 0) return 'civilian';
   if (undercoverSide >= living.length - undercoverSide) return 'undercover';
   return null;
 }
