@@ -19,7 +19,7 @@
 
 ## 4. 間諜危機 engine：勝負
 
-- [ ] 4.1 勝負判定、結束公開地點／間諜／角色、再來一局，確認 spyfall/win-condition 的 scenarios 測試通過
+- [x] 4.1 勝負判定、結束公開地點／間諜／角色、再來一局，確認 spyfall/win-condition 的 scenarios 測試通過
 
 ## 5. 間諜危機 engine：bot
 

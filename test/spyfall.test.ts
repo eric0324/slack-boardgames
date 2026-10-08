@@ -289,3 +289,52 @@ describe('spyfall/rounds: 間諜猜地點', () => {
     expect(announces(after.events).join('\n')).toContain('沒有猜地點');
   });
 });
+
+describe('spyfall/win-condition: 勝負與結束公開', () => {
+  const accuse = (target: string) =>
+    votes(['p1', 'p2', 'p3', 'p4'].map((v) => [v, v === target ? 'abstain' : target] as [string, string]), voting().state);
+  const lastAnnounce = (events: GameEvent[]) => announces(events).at(-1)!;
+
+  it('指控錯人：公告是平民，間諜獲勝', () => {
+    const { state, events } = accuse('p2');
+    expect(state).toMatchObject({ phase: 'ended', winner: 'spy' });
+    expect(announces(events).join('\n')).toContain('<@p2> 是平民');
+    expect(lastAnnounce(events)).toContain('間諜獲勝');
+  });
+
+  it('沒有人被指控：間諜獲勝', () => {
+    const none = votes(['p1', 'p2', 'p3', 'p4'].map((v) => [v, 'abstain'] as [string, string]), voting().state);
+    expect(none.state.winner).toBe('spy');
+  });
+
+  it('抓到間諜且間諜猜錯或沒猜：平民獲勝；猜中：間諜獲勝', () => {
+    const caught = accuse('p4').state;
+    expect(run([{ type: 'guess', user: 'p4', location: '夜市' }], caught).state.winner).toBe('civilian');
+    expect(run([{ type: 'guess', user: 'p4', location: '飯店' }], caught).state.winner).toBe('spy');
+  });
+
+  it('提問中主動猜：猜中間諜獲勝，猜錯平民獲勝', () => {
+    expect(run([{ type: 'guess', user: 'p4', location: '飯店' }], started(4).state).state.winner).toBe('spy');
+    expect(run([{ type: 'guess', user: 'p4', location: '夜市' }], started(4).state).state.winner).toBe('civilian');
+  });
+
+  it('結束時公開獲勝方、地點、間諜和每位平民的角色，並貼出再來一局', () => {
+    const { state, events } = run([{ type: 'guess', user: 'p4', location: '夜市' }], started(4).state);
+    const text = lastAnnounce(events);
+    expect(text).toContain('平民獲勝');
+    expect(text).toContain('地點：飯店');
+    expect(text).toContain('間諜：<@p4>');
+    for (const p of state.players.filter((x) => x.role === 'civilian')) expect(text).toContain(`<@${p.id}>：${p.job}`);
+    expect(prompts(events, 'rematch')).toHaveLength(1);
+  });
+
+  it('再來一局：上一局的真人玩家可以開新房間，當房主；其他人不行；取消的遊戲不能', () => {
+    const ended = run([{ type: 'guess', user: 'p4', location: '夜市' }], started(4).state).state;
+    const again = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], ended);
+    expect(again.state).toMatchObject({ phase: 'lobby', host: 'p3', players: [{ id: 'p3' }] });
+    expect(again.state.timerSeq).toBe(ended.timerSeq);
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(4).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});

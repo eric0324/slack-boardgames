@@ -28,6 +28,7 @@ export interface SState {
   phase: SPhase;
   players: SPlayer[];
   location?: string;
+  winner?: 'spy' | 'civilian';
   timerSeq: number;
   qa?: { step: 'choose' | 'answer'; asker: string; target?: string; lastAsker?: string };
   votes: Record<string, string>;
@@ -53,9 +54,10 @@ export type SAction =
   | { type: 'guess'; user: string; location: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
-  | { type: 'timeout'; id: number };
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<SAction, { type: 'new' }>;
+type GameAction = Exclude<SAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: SState;
@@ -216,7 +218,7 @@ function endVote(c: Ctx) {
   }
   if (top.length !== 1) {
     c.events.push({ type: 'announce', text: '🤷 沒有人被指控，沒有抓到間諜。' });
-    endGame(c);
+    endGame(c, 'spy');
     return;
   }
   accuse(c, top[0]);
@@ -255,7 +257,8 @@ function accuse(c: Ctx, id: string) {
   const s = c.s;
   c.events.push({ type: 'announce', text: `👉 ${mention(id)} 被指控！` });
   if (s.players.find((p) => p.id === id)!.role !== 'spy') {
-    endGame(c);
+    c.events.push({ type: 'announce', text: `😱 ${mention(id)} 是平民，抓錯人了！` });
+    endGame(c, 'spy');
     return;
   }
   s.phase = 'lastGuess';
@@ -273,17 +276,34 @@ const spyOf = (s: SState) => s.players.find((p) => p.role === 'spy')!.id;
 function finishGuess(c: Ctx, location: string | undefined) {
   const s = c.s;
   const spy = mention(spyOf(s));
+  const hit = location !== undefined && normalize(location) === normalize(s.location!);
   let text: string;
   if (location === undefined) text = `⌛ ${spy} 沒有猜地點。`;
-  else if (normalize(location) === normalize(s.location!)) text = `🎯 ${spy} 猜「${location.trim()}」，猜中了！`;
+  else if (hit) text = `🎯 ${spy} 猜「${location.trim()}」，猜中了！`;
   else text = `❌ ${spy} 猜「${location.trim()}」，猜錯了。`;
   c.events.push({ type: 'announce', text });
-  endGame(c);
+  endGame(c, hit ? 'spy' : 'civilian');
 }
 
-function endGame(c: Ctx) {
-  c.s.phase = 'ended';
-  c.s.timers = {};
+// 結束：公開獲勝方、地點、間諜和每位平民的角色
+function endGame(c: Ctx, winner: 'spy' | 'civilian') {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  const title = winner === 'civilian' ? '🎉 遊戲結束，平民獲勝！' : '🕵️ 遊戲結束，間諜獲勝！';
+  const roster = s.players
+    .filter((p) => p.role === 'civilian')
+    .map((p) => `${mention(p.id)}：${p.job}`)
+    .join('\n');
+  c.events.push(
+    {
+      type: 'announce',
+      text: `${title}\n地點：${s.location}\n間諜：${mention(spyOf(s))}\n${roster}`,
+      gif: winner === 'civilian' ? 'goodWin' : 'wolvesWin',
+    },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 function handle(c: Ctx, action: GameAction): boolean {
@@ -419,6 +439,15 @@ export function applySpyfall(state: SState | undefined, action: SAction, rng: Rn
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }
