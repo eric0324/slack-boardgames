@@ -1,9 +1,11 @@
 // 一字千金遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyJustOne(state, action, rng) → { state, events }。
-import { type GameEvent, type Rng } from './engine.js';
+import { CODENAMES_WORDS } from './codenamesWords.js';
+import { mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_JUSTONE_PLAYERS = 3;
 export const MAX_JUSTONE_PLAYERS = 7;
 const TITLE = '一字千金';
+const DECK_SIZE = 13;
 
 export type JPhase = 'lobby' | 'clue' | 'guess' | 'ended';
 
@@ -17,6 +19,11 @@ export interface JState {
   host: string;
   phase: JPhase;
   players: JPlayer[];
+  deck: string[]; // 還沒翻的牌
+  word?: string; // 這一輪的詞
+  card: number; // 第幾張（1 起算）
+  guesser: number; // 猜詞的人在 players 裡的位置
+  score: number;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -51,6 +58,24 @@ const lobbyEvent = (s: JState): GameEvent => ({
   players: s.players.map((p) => p.id),
   open: s.phase === 'lobby',
 });
+
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 新的一輪：翻一張牌給猜詞以外的人
+function startRound(c: Ctx) {
+  const s = c.s;
+  s.word = s.deck.shift();
+  s.card++;
+  s.phase = 'clue';
+  c.events.push({ type: 'announce', text: `🃏 第 ${s.card} 張：${mention(s.players[s.guesser].id)} 猜詞` });
+}
 
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
@@ -89,7 +114,10 @@ function handle(c: Ctx, action: GameAction): boolean {
       const n = s.players.length;
       if (n < MIN_JUSTONE_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_JUSTONE_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'clue' }));
-      s.phase = 'clue';
+      s.deck = shuffle(CODENAMES_WORDS, c.rng).slice(0, DECK_SIZE);
+      s.guesser = Math.floor(c.rng() * n);
+      c.events.push({ type: 'announce', text: `💡 一字千金開始！牌堆 ${DECK_SIZE} 張，大家一起合作，看能猜對幾張。`, gif: 'start' });
+      startRound(c);
       return true;
     }
     case 'cancel': {
@@ -124,6 +152,10 @@ function createLobby(prev: JState | undefined, host: string, channel: string): R
     host,
     phase: 'lobby',
     players: [{ id: host }],
+    deck: [],
+    card: 0,
+    guesser: 0,
+    score: 0,
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
