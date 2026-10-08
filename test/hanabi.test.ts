@@ -55,3 +55,58 @@ describe('hanabi/setup: 花火的房間', () => {
     expect(ephemeralTo(run([{ type: 'start', user: 'p2' }], lobby).events, 'p2')).toBeDefined();
   });
 });
+
+// rng 固定時不洗牌：牌堆依紅、黃、綠、藍、白排列，每色 1 1 1 2 2 3 3 4 4 5，依序發給 p1、p2…；第一位是最後一位玩家
+const started = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const values = (p: { options: { value: string }[] }) => p.options.map((o) => o.value);
+
+describe('hanabi/setup: 牌堆與發牌', () => {
+  it('50 張牌：每色 1×3、2×2、3×2、4×2、5×1', () => {
+    const { state } = started(2);
+    const all = [...state.deck, ...state.players.flatMap((p) => p.hand)];
+    expect(all).toHaveLength(50);
+    for (const color of ['red', 'yellow', 'green', 'blue', 'white']) {
+      const nums = all.filter((x) => x.color === color).map((x) => x.n).sort();
+      expect(nums).toEqual([1, 1, 1, 2, 2, 3, 3, 4, 4, 5]);
+    }
+  });
+
+  it('2～3 人每人 5 張、4～5 人每人 4 張；提示 8、失誤 0', () => {
+    expect(started(2).state.players[0].hand).toHaveLength(5);
+    expect(started(3).state.deck).toHaveLength(35);
+    const four = started(4).state;
+    expect(four.players[0].hand).toHaveLength(4);
+    expect(four.deck).toHaveLength(34);
+    expect(four).toMatchObject({ hints: 8, fuses: 0 });
+  });
+
+  it('第一位是隨機的', () => {
+    expect(started(3).state.turn).toBe(2);
+    expect(started(3, () => 0).state.turn).toBe(0);
+  });
+});
+
+describe('hanabi/setup: 看牌', () => {
+  it('回合公告煙火進度、提示、失誤、牌堆，附上看牌和出牌、棄牌按鈕', () => {
+    const { events } = started(2);
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('輪到 <@p2>');
+    expect(text).toContain('提示 8');
+    expect(text).toContain('失誤 0／3');
+    expect(text).toContain('牌堆 40');
+    const p = prompts(events, 'hanabiTurn').at(-1)!;
+    expect(values(p)).toEqual(['peek', 'play:0', 'play:1', 'play:2', 'play:3', 'play:4', 'discard:0', 'discard:1', 'discard:2', 'discard:3', 'discard:4']);
+  });
+
+  it('看牌：只有自己看到別人的手牌和自己已知的提示，看不到自己的牌', () => {
+    const { state, events } = run([{ type: 'peek', user: 'p1' }], started(2).state);
+    const eph = ephemeralTo(events, 'p1') as { text: string };
+    expect(eph.text).toContain('<@p2>：🟥3 🟥3 🟥4 🟥4 🟥5');
+    expect(eph.text).toContain('第 1 張：？？');
+    expect(eph.text).not.toContain('🟥1');
+    expect(events.filter((e) => e.type === 'announce')).toEqual([]);
+    expect(state.players[0].hand).toHaveLength(5);
+  });
+});
