@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 在全新的 Ubuntu 24.04 主機上安裝 werewolf bot（Google Cloud e2-micro 等小主機）
-# 用法：curl -fsSL https://raw.githubusercontent.com/eric0324/slack-boardgames/main/deploy/setup.sh | bash
+# 用法：curl -fsSL https://raw.githubusercontent.com/eric0324/slack-gamebuddy/main/deploy/setup.sh | bash
 set -euo pipefail
 
-REPO=https://github.com/eric0324/slack-boardgames.git
+REPO=https://github.com/eric0324/slack-gamebuddy.git
 HOME_DIR=/opt/werewolf
 APP_DIR=$HOME_DIR/app
 
