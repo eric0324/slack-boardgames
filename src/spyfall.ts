@@ -10,8 +10,9 @@ const QA_MS = 8 * 60_000;
 const REMIND_MS = 60_000;
 const STEP_MS = 40_000;
 const VOTE_MS = 60_000;
+const GUESS_MS = 60_000;
 
-export type SPhase = 'lobby' | 'qa' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
+export type SPhase = 'lobby' | 'qa' | 'vote' | 'pkSpeech' | 'pkVote' | 'lastGuess' | 'ended';
 
 export interface SPlayer {
   id: string;
@@ -49,6 +50,7 @@ export type SAction =
   | { type: 'endDiscussion'; user: string }
   | { type: 'endSpeech'; user: string }
   | { type: 'dayVote'; user: string; target: string }
+  | { type: 'guess'; user: string; location: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'timeout'; id: number };
@@ -250,7 +252,32 @@ function nextSpeaker(c: Ctx) {
 }
 
 function accuse(c: Ctx, id: string) {
+  const s = c.s;
   c.events.push({ type: 'announce', text: `👉 ${mention(id)} 被指控！` });
+  if (s.players.find((p) => p.id === id)!.role !== 'spy') {
+    endGame(c);
+    return;
+  }
+  s.phase = 'lastGuess';
+  s.timers = {};
+  c.events.push({
+    type: 'announce',
+    text: `🕵️ 抓到間諜了！${mention(id)} 有 ${GUESS_MS / 1000} 秒最後一次機會：輸入 \`/game spyfall guess <地點>\`，猜中就逆轉獲勝。`,
+  });
+  s.timers.step = startTimer(c, GUESS_MS);
+}
+
+const normalize = (text: string) => text.trim().toLowerCase();
+const spyOf = (s: SState) => s.players.find((p) => p.role === 'spy')!.id;
+
+function finishGuess(c: Ctx, location: string | undefined) {
+  const s = c.s;
+  const spy = mention(spyOf(s));
+  let text: string;
+  if (location === undefined) text = `⌛ ${spy} 沒有猜地點。`;
+  else if (normalize(location) === normalize(s.location!)) text = `🎯 ${spy} 猜「${location.trim()}」，猜中了！`;
+  else text = `❌ ${spy} 猜「${location.trim()}」，猜錯了。`;
+  c.events.push({ type: 'announce', text });
   endGame(c);
 }
 
@@ -366,10 +393,16 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.voters.every((v) => s.votes[v])) endVote(c);
       return true;
     }
+    case 'guess': {
+      if ((s.phase !== 'qa' && s.phase !== 'lastGuess') || action.user !== spyOf(s)) return reply(c, action.user, '現在不能猜地點');
+      finishGuess(c, action.location);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.step && action.id !== s.timers.remind && action.id !== s.timers.total) return false;
       if (s.phase === 'vote' || s.phase === 'pkVote') endVote(c);
       else if (s.phase === 'pkSpeech') nextSpeaker(c);
+      else if (s.phase === 'lastGuess') finishGuess(c, undefined);
       else if (s.phase === 'qa' && action.id === s.timers.step) advance(c);
       else if (s.phase === 'qa' && action.id === s.timers.remind) {
         c.events.push({ type: 'announce', text: '⏰ 提問時間剩下 1 分鐘！' });

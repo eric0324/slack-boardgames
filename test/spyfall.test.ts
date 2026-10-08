@@ -241,3 +241,51 @@ describe('spyfall/rounds: 投票與 PK', () => {
     expect(announces(none.events).join('\n')).toContain('沒有抓到間諜');
   });
 });
+
+// 4 人局：p4 是間諜，地點是飯店
+describe('spyfall/rounds: 間諜猜地點', () => {
+  const guess = (user: string, location: string, s: SState) => run([{ type: 'guess', user, location }], s);
+
+  it('間諜在提問中猜中（忽略前後空白）：間諜獲勝，遊戲結束', () => {
+    const { state, events } = guess('p4', ' 飯店 ', started(4).state);
+    expect(state.phase).toBe('ended');
+    expect(announces(events).join('\n')).toContain('猜中');
+  });
+
+  it('比對忽略大小寫', () => {
+    const s = { ...started(4).state, location: 'KTV包廂' };
+    expect(announces(guess('p4', 'ktv包廂', s).events).join('\n')).toContain('猜中');
+  });
+
+  it('間諜在提問中猜錯：遊戲結束', () => {
+    const { state, events } = guess('p4', '夜市', started(4).state);
+    expect(state.phase).toBe('ended');
+    expect(announces(events).join('\n')).toContain('猜錯');
+  });
+
+  it('平民、或不在可以猜的時間，不能猜地點', () => {
+    const civ = guess('p1', '飯店', started(4).state);
+    expect(civ.state.phase).toBe('qa');
+    expect(ephemeralTo(civ.events, 'p1')).toMatchObject({ text: '現在不能猜地點' });
+    const inVote = guess('p4', '飯店', voting().state);
+    expect(inVote.state.phase).toBe('vote');
+    expect(ephemeralTo(inVote.events, 'p4')).toMatchObject({ text: '現在不能猜地點' });
+  });
+
+  const accused = () => votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p4', 'p1']], voting().state);
+
+  it('間諜被指控：公告抓到間諜，有 60 秒最後一次猜地點', () => {
+    const { state, events } = accused();
+    expect(state.phase).toBe('lastGuess');
+    expect(announces(events).join('\n')).toContain('抓到間諜');
+    expect(timerOf(events, 60_000)).toBeDefined();
+    expect(announces(guess('p4', '飯店', state).events).join('\n')).toContain('猜中');
+  });
+
+  it('被指控的間諜 60 秒內沒猜：遊戲結束', () => {
+    const { state, events } = accused();
+    const after = run([{ type: 'timeout', id: timerOf(events, 60_000).id }], state);
+    expect(after.state.phase).toBe('ended');
+    expect(announces(after.events).join('\n')).toContain('沒有猜地點');
+  });
+});
