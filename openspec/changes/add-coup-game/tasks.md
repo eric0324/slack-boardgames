@@ -18,7 +18,7 @@
 ## 4. Slack adapter 與文件
 
 - [x] 4.1 adapter 註冊政變：指令與說明、遊戲清單、按鈕、私訊按鈕、計時
-- [ ] 4.2 manifest usage hint、README、wiki
+- [x] 4.2 manifest usage hint、README、wiki
 
 ## 5. 整合驗證
 
