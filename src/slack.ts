@@ -4,10 +4,11 @@ import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
 import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applyCodenames, type CAction, type CState } from './codenames.js';
+import { applyLiarsDice, type LAction, type LState } from './liarsdice.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice';
 type OtherKind = Exclude<Kind, 'werewolf'>;
 
 // 狼人殺以外的遊戲都用同一套方式接上 adapter：engine、指令解析、按鈕對應、說明
@@ -60,7 +61,8 @@ const GAME_LIST = [
   '• 📍 *間諜危機*（`spyfall`）：4～10 人，開房 `/game spyfall new`',
   '• 🏰 *阿瓦隆*（`avalon`）：5～10 人，開房 `/game avalon new`',
   '• 🟥 *機密代號*（`codenames`）：4～12 人（不支援 bot），開房 `/game codenames new`',
-  '各遊戲的指令：`/game werewolf help`、`/game undercover help`、`/game spyfall help`、`/game avalon help`、`/game codenames help`',
+  '• 🎲 *吹牛骰*（`liarsdice`）：2～8 人，開房 `/game liarsdice new`',
+  '各遊戲的指令：`/game <遊戲代號> help`，例如 `/game liarsdice help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -110,6 +112,18 @@ const CODENAMES_HELP = [
   '• `/game codenames next`：直接結束目前隊伍的回合（房主）',
   '• `/game codenames cancel`：取消遊戲（房主）',
   '翻牌、結束猜牌都用按鈕',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const LIARSDICE_HELP = [
+  '*吹牛骰指令*',
+  '• `/game liarsdice new`：開房（任何人）',
+  '• `/game liarsdice addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game liarsdice removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game liarsdice start`：開始遊戲，需要 2～8 人（房主）',
+  '• `/game liarsdice bid <數量> <點數>`：喊「全場至少有 N 個 X 點」（輪到你時）',
+  '• `/game liarsdice cancel`：取消遊戲（房主）',
+  '覺得上一個喊數是吹牛就按「開！」；1 點是萬用，這一輪有人喊過 1 點就不再萬用',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -185,6 +199,21 @@ export function parseCodenamesCommand(text: string, user: string, channel: strin
   const action = parseUndercoverCommand(text, user, channel);
   if (!action || action.type === 'guess' || action.type === 'endDiscussion' || action.type === 'skipSpeaker') return null;
   return action as CAction;
+}
+
+// 吹牛骰的子指令：bid <數量> <點數>
+export function parseLiarsDiceCommand(text: string, user: string, channel: string): LAction | null {
+  const [sub, ...rest] = text.trim().split(/\s+/);
+  if (sub === 'bid') return rest.length === 2 ? { type: 'bid', user, quantity: Number(rest[0]), face: Number(rest[1]) } : null;
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || !['new', 'start', 'cancel', 'addBot', 'removeBot'].includes(action.type)) return null;
+  return action as LAction;
+}
+
+function liarsDiceButton(kind: string, _value: string, user: string, channel: string): LAction | null {
+  if (kind === 'join' || kind === 'leave' || kind === 'start' || kind === 'challenge') return { type: kind, user };
+  if (kind === 'rematch') return { type: 'rematch', user, channel };
+  return null;
 }
 
 function codenamesButton(kind: string, value: string, user: string, channel: string): CAction | null {
@@ -310,6 +339,7 @@ export class GameHost {
   spyfallGames = new Map<string, SState>();
   avalonGames = new Map<string, AState>();
   codenamesGames = new Map<string, CState>();
+  liarsDiceGames = new Map<string, LState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private boardTs = new Map<string, string>(); // 機密代號的牌桌訊息
@@ -336,6 +366,7 @@ export class GameHost {
       spyfall: { states: this.spyfallGames, apply: applySpyfall, parse: parseSpyfallCommand, button: spyfallButton, help: SPYFALL_HELP },
       avalon: { states: this.avalonGames, apply: applyAvalon, parse: parseAvalonCommand, button: avalonButton, help: AVALON_HELP },
       codenames: { states: this.codenamesGames, apply: applyCodenames, parse: parseCodenamesCommand, button: codenamesButton, help: CODENAMES_HELP },
+      liarsdice: { states: this.liarsDiceGames, apply: applyLiarsDice, parse: parseLiarsDiceCommand, button: liarsDiceButton, help: LIARSDICE_HELP },
     };
   }
 

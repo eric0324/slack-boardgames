@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -786,5 +786,45 @@ describe('game-commands: 機密代號', () => {
     expect(parseCodenamesCommand('clue 水果', 'U1', 'C1')).toBeNull();
     expect(parseCodenamesCommand('next', 'U1', 'C1')).toEqual({ type: 'skipTurn', user: 'U1' });
     expect(parseCodenamesCommand('addbot', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 1 });
+  });
+});
+
+describe('game-commands: 吹牛骰', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game 清單有吹牛骰；/game liarsdice help 列出指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    for (const s of ['吹牛骰', 'liarsdice', '2～8 人', '/game liarsdice new']) expect(lastEph(calls).text).toContain(s);
+    await host.game('C1', 'U1', 'alice', 'liarsdice help');
+    for (const s of ['new', 'addbot', 'removebot', 'start', 'bid', 'cancel']) expect(lastEph(calls).text).toContain(`/game liarsdice ${s}`);
+  });
+
+  it('開房、加入、開始、私訊骰子、喊數、開、計時都交給吹牛骰', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'liarsdice new');
+    expect(calls.at(-1)!.args.text).toContain('吹牛骰房間');
+    for (const u of ['U2', 'U3']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1' && String(c.args.text).includes('你的骰子'))).toBe(true);
+    await host.game('C1', 'U3', 'U3', 'liarsdice bid 16 6');
+    expect(host.games.get('C1')).toBeUndefined();
+    await host.button('ww:challenge:0', 'C1|U1', 'U1', 'U1');
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(calls.some((c) => String(c.args.text).includes('<@U3> 輸了'))).toBe(true);
+  });
+
+  it('一個頻道同時只有一局；指令解析', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'liarsdice new');
+    await host.game('C1', 'U2', 'bob', 'codenames new');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    expect(parseLiarsDiceCommand('bid 3 5', 'U1', 'C1')).toEqual({ type: 'bid', user: 'U1', quantity: 3, face: 5 });
+    expect(parseLiarsDiceCommand('bid 3', 'U1', 'C1')).toBeNull();
+    expect(parseLiarsDiceCommand('addbot 2', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 2 });
+    expect(parseLiarsDiceCommand('next', 'U1', 'C1')).toBeNull();
   });
 });
