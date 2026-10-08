@@ -165,6 +165,31 @@ const HANABI_HELP = [
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
+// 遊戲大廳：每款遊戲一列，附「開房」按鈕
+const CATALOG: { kind: Kind; emoji: string; name: string; players: string; desc: string }[] = [
+  { kind: 'werewolf', emoji: '🐺', name: '狼人殺', players: '6～12 人', desc: '陣營推理，夜晚私訊行動、白天輪流發言投票' },
+  { kind: 'undercover', emoji: '🕵️', name: '誰是臥底', players: '4～12 人', desc: '每人一個詞，輪流描述、投票找出拿到不同詞的臥底' },
+  { kind: 'spyfall', emoji: '📍', name: '間諜危機', players: '4～10 人', desc: '只有間諜不知道地點，接力提問、投票抓間諜' },
+  { kind: 'avalon', emoji: '🏰', name: '阿瓦隆', players: '5～10 人', desc: '好人對壞人，隊長組隊出任務，沒有人會出局' },
+  { kind: 'codenames', emoji: '🟥', name: '機密代號', players: '4～12 人', desc: '紅藍兩隊比賽，隊長用一個詞當提示翻字卡' },
+  { kind: 'liarsdice', emoji: '🎲', name: '吹牛骰', players: '2～8 人', desc: '偷偷擲骰子，輪流喊數或開，輸的人少一顆骰子' },
+  { kind: 'justone', emoji: '💡', name: '一字千金', players: '3～7 人', desc: '合作猜詞，大家各給一個提示，重複的會被刪掉' },
+  { kind: 'coup', emoji: '👑', name: '政變', players: '3～6 人', desc: '虛張聲勢，宣稱任何角色的能力，質疑或阻擋' },
+  { kind: 'hanabi', emoji: '🎆', name: '花火', players: '2～5 人', desc: '合作遊戲，看得到別人的牌、看不到自己的' },
+];
+
+function lobbyBlocks(channel: string) {
+  return [
+    { type: 'section', text: { type: 'mrkdwn', text: '*🎮 遊戲大廳*：點「開房」就能開一局，你會是房主' } },
+    ...CATALOG.map((g, i) => ({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `${g.emoji} *${g.name}*（\`${g.kind}\`）${g.players}\n${g.desc}` },
+      accessory: button('lobbyOpen', i, '開房', channel, g.kind),
+    })),
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `看指令：\`/game <代號> help\`｜📖 <${WIKI}|wiki>` }] },
+  ];
+}
+
 const NOT_APPLICABLE = '這個指令不適用於目前的遊戲。';
 const BUSY = '這個頻道已經有遊戲了。';
 
@@ -526,7 +551,7 @@ export class GameHost {
     if (g === 'werewolf') return this.command(channel, user, userName, restText);
     if (this.isOther(g)) return this.play(g, channel, user, restText);
     if (g === 'stats') return this.showStats(channel, user, restText);
-    return this.reply(channel, user, GAME_LIST);
+    return this.showLobby(channel, user);
   }
 
   // `/werewolf <子指令>`（也是 `/game werewolf <子指令>`）
@@ -543,6 +568,14 @@ export class GameHost {
 
 
 
+
+  // `/game`：只讓輸入的人看到遊戲大廳
+  private showLobby(channel: string, user: string): Promise<void> {
+    this.queue = this.queue
+      .then(() => this.client.chat.postEphemeral({ channel, user, text: GAME_LIST, blocks: lobbyBlocks(channel) }))
+      .catch((err) => console.error('[werewolf] Slack API error', err));
+    return this.queue;
+  }
 
   // `/game <遊戲> <子指令>`（狼人殺以外的遊戲）
   private play(kind: OtherKind, channel: string, user: string, text: string): Promise<void> {
@@ -568,6 +601,11 @@ export class GameHost {
     const kind = actionId.split(':')[1];
     const sep = value.indexOf('|');
     const channel = value.slice(0, sep);
+    if (kind === 'lobbyOpen') {
+      const game = value.slice(sep + 1);
+      if (game === 'werewolf') return this.command(channel, user, userName, 'new');
+      return this.isOther(game) ? this.play(game, channel, user, 'new') : Promise.resolve();
+    }
     const last = this.lastKind.get(channel);
     if (this.isOther(last)) {
       const action = this.defs[last].button(kind, value.slice(sep + 1), user, channel);

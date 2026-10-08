@@ -959,3 +959,40 @@ describe('game-commands: 花火', () => {
     expect(parseHanabiCommand('addbot', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 1 });
   });
 });
+
+describe('game-commands: 遊戲大廳', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+  const KINDS = ['werewolf', 'undercover', 'spyfall', 'avalon', 'codenames', 'liarsdice', 'justone', 'coup', 'hanabi'];
+
+  it('/game、/game help、不認識的代號：只讓自己看到大廳，每款遊戲一列加開房按鈕', async () => {
+    for (const text of ['', 'help', 'chess']) {
+      const { host, calls } = setup();
+      await host.game('C1', 'U1', 'alice', text);
+      const eph = lastEph(calls);
+      expect(eph.user).toBe('U1');
+      const buttons = (eph.blocks as any[]).filter((b) => b.accessory).map((b) => b.accessory);
+      expect(buttons.map((b) => b.value)).toEqual(KINDS.map((k) => `C1|${k}`));
+      expect(buttons.every((b: any) => b.action_id.startsWith('ww:lobbyOpen:') && b.text.text === '開房')).toBe(true);
+      const all = JSON.stringify(eph.blocks);
+      for (const s of ['狼人殺', '吹牛骰', '花火', '2～8 人', 'wiki', '/game <代號> help']) expect(all).toContain(s);
+    }
+  });
+
+  it('按開房等同 /game <代號> new，按的人當房主', async () => {
+    const { host, calls } = setup();
+    await host.button('ww:lobbyOpen:5', 'C1|liarsdice', 'U2', 'bob');
+    expect(host.liarsDiceGames.get('C1')).toMatchObject({ phase: 'lobby', host: 'U2' });
+    expect(calls.at(-1)!.args.text).toContain('吹牛骰房間');
+    const ww = setup();
+    await ww.host.button('ww:lobbyOpen:0', 'C1|werewolf', 'U3', 'carol');
+    expect(ww.host.games.get('C1')).toMatchObject({ phase: 'lobby', host: 'U3' });
+  });
+
+  it('頻道已經有遊戲時拒絕', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'werewolf new');
+    await host.button('ww:lobbyOpen:7', 'C1|coup', 'U2', 'bob');
+    expect(host.coupGames.has('C1')).toBe(false);
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+  });
+});
