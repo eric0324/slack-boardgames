@@ -181,6 +181,30 @@ function endGame(c: Ctx, winner: string) {
   );
 }
 
+// bot：估計全場某點數的期望數量，喊數超過期望值 1 以上就開，否則從自己最多的點數喊剛好更大的數
+function nextBotAction(s: LState): GameAction | null {
+  if (s.phase !== 'bid') return null;
+  const me = s.players[s.turn];
+  if (!isBot(me.id)) return null;
+  const others = totalDice(s) - me.dice.length;
+  const wildFor = (face: number) => !s.onesCalled && face !== 1;
+  const own = (face: number) => me.dice.filter((d) => d === face || (wildFor(face) && d === 1)).length;
+  const expected = (face: number) => own(face) + others * (wildFor(face) ? 1 / 3 : 1 / 6);
+  if (s.bid && s.bid.quantity > expected(s.bid.face) + 1) return { type: 'challenge', user: me.id };
+  const face = [2, 3, 4, 5, 6].reduce((best, f) => (own(f) > own(best) ? f : best), 6);
+  if (!s.bid) return { type: 'bid', user: me.id, quantity: Math.max(1, own(face)), face };
+  const quantity = rank(face) > rank(s.bid.face) ? s.bid.quantity : s.bid.quantity + 1;
+  if (quantity > expected(face) + 1) return { type: 'challenge', user: me.id };
+  return { type: 'bid', user: me.id, quantity, face };
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s);
+    if (!action || !handle(c, action)) return;
+  }
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -282,6 +306,7 @@ export function applyLiarsDice(state: LState | undefined, action: LAction, rng: 
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
+  if (changed) runBots(c);
   return { state: changed ? c.s : state, events: c.events };
 }
 

@@ -220,3 +220,36 @@ describe('liarsdice/rounds: 勝負', () => {
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
   });
 });
+
+// 1 真人 + 1 bot，rng 固定：骰子全是 6，bot 先喊
+const withBot = () => run([{ type: 'addBot', user: 'p1', count: 1 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+
+describe('liarsdice/bots: bot 喊數與開', () => {
+  it('輪到 bot 時立刻從自己最多的點數喊數', () => {
+    const { state, events } = withBot();
+    const bot = state.players[1].id;
+    expect(state.bid).toMatchObject({ face: 6, by: bot });
+    expect(state.turn).toBe(0);
+    expect(announces(events).join('\n')).toContain('喊：「');
+  });
+
+  it('喊數遠超過期望值時 bot 立刻開', () => {
+    const { state, events } = bid('p1', 9, 5, withBot().state);
+    const bot = state.players[1].id;
+    expect(announces(events).join('\n')).toContain(`開「9 個 5」`);
+    expect(announces(events).join('\n')).toContain('<@p1> 輸了');
+    expect(bot).toBeDefined();
+  });
+
+  it('1 位真人加 bot、真人什麼都不做，遊戲一定會結束', () => {
+    for (const bots of [1, 3, 7]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = seeded(seed);
+        let s = run([{ type: 'addBot', user: 'p1', count: bots }, { type: 'start', user: 'p1' }], lobbyWith(1).state, r).state;
+        for (let step = 0; step < 500 && s.phase !== 'ended'; step++) s = applyLiarsDice(s, { type: 'timeout', id: s.timers.phase! }, r).state;
+        expect(s.phase, `${bots} bots, seed ${seed}`).toBe('ended');
+      }
+    }
+  });
+});
