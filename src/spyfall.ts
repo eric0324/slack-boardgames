@@ -9,8 +9,9 @@ const TITLE = '間諜危機';
 const QA_MS = 8 * 60_000;
 const REMIND_MS = 60_000;
 const STEP_MS = 40_000;
+const VOTE_MS = 60_000;
 
-export type SPhase = 'lobby' | 'qa' | 'vote' | 'ended';
+export type SPhase = 'lobby' | 'qa' | 'vote' | 'pkSpeech' | 'pkVote' | 'ended';
 
 export interface SPlayer {
   id: string;
@@ -28,6 +29,11 @@ export interface SState {
   location?: string;
   timerSeq: number;
   qa?: { step: 'choose' | 'answer'; asker: string; target?: string; lastAsker?: string };
+  votes: Record<string, string>;
+  candidates: string[];
+  voters: string[];
+  speakers: string[];
+  speaker?: string;
   timers: { step?: number; remind?: number; total?: number };
 }
 
@@ -41,6 +47,8 @@ export type SAction =
   | { type: 'endAnswer'; user: string }
   | { type: 'skipSpeaker'; user: string }
   | { type: 'endDiscussion'; user: string }
+  | { type: 'endSpeech'; user: string }
+  | { type: 'dayVote'; user: string; target: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'timeout'; id: number };
@@ -167,9 +175,88 @@ function advance(c: Ctx) {
 
 function startVote(c: Ctx) {
   const s = c.s;
-  s.phase = 'vote';
   s.qa = undefined;
   s.timers = {};
+  const ids = s.players.map((p) => p.id);
+  openVote(c, 'vote', ids, ids);
+}
+
+function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters: string[]) {
+  const s = c.s;
+  s.phase = phase;
+  s.votes = {};
+  s.candidates = candidates;
+  s.voters = voters;
+  c.events.push({
+    type: 'prompt',
+    kind: phase === 'vote' ? 'dayVote' : 'pkVote',
+    audience: 'channel',
+    text: phase === 'vote' ? '🗳️ 提問結束！請投票指控你覺得是間諜的人。' : '⚔️ PK 投票：請在平票的玩家中選一位（PK 中的玩家不能投票）。',
+    options: [...candidates.map((id) => ({ value: id, label: id })), { value: 'abstain', label: '棄票' }],
+  });
+  s.timers.step = startTimer(c, VOTE_MS);
+}
+
+function endVote(c: Ctx) {
+  const s = c.s;
+  const lines = s.voters.map((v) => {
+    const t = s.votes[v] ?? 'abstain';
+    return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
+  });
+  c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
+  const tally = new Map<string, number>();
+  for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
+  const max = Math.max(0, ...tally.values());
+  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  if (top.length > 1 && s.phase === 'vote') {
+    startPk(c, top);
+    return;
+  }
+  if (top.length !== 1) {
+    c.events.push({ type: 'announce', text: '🤷 沒有人被指控，沒有抓到間諜。' });
+    endGame(c);
+    return;
+  }
+  accuse(c, top[0]);
+}
+
+function startPk(c: Ctx, tied: string[]) {
+  const s = c.s;
+  s.phase = 'pkSpeech';
+  s.candidates = tied;
+  s.speakers = s.players.map((p) => p.id).filter((id) => tied.includes(id));
+  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序辯解。`, gif: 'pk' });
+  nextSpeaker(c);
+}
+
+function nextSpeaker(c: Ctx) {
+  const s = c.s;
+  const id = s.speakers.shift();
+  if (!id) {
+    s.speaker = undefined;
+    const voters = s.players.map((p) => p.id).filter((v) => !s.candidates.includes(v));
+    openVote(c, 'pkVote', s.candidates, voters);
+    return;
+  }
+  s.speaker = id;
+  c.events.push({
+    type: 'prompt',
+    kind: 'endSpeech',
+    audience: 'channel',
+    text: `🎤 輪到 ${mention(id)} 辯解（${STEP_MS / 1000} 秒）`,
+    options: [{ value: id, label: '結束發言' }],
+  });
+  s.timers.step = startTimer(c, STEP_MS);
+}
+
+function accuse(c: Ctx, id: string) {
+  c.events.push({ type: 'announce', text: `👉 ${mention(id)} 被指控！` });
+  endGame(c);
+}
+
+function endGame(c: Ctx) {
+  c.s.phase = 'ended';
+  c.s.timers = {};
 }
 
 function handle(c: Ctx, action: GameAction): boolean {
@@ -262,8 +349,28 @@ function handle(c: Ctx, action: GameAction): boolean {
       startVote(c);
       return true;
     }
+    case 'endSpeech': {
+      if (s.phase !== 'pkSpeech') return false;
+      if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'dayVote': {
+      if (s.phase !== 'vote' && s.phase !== 'pkVote') return false;
+      if (!s.players.some((p) => p.id === action.user)) return false;
+      if (!s.voters.includes(action.user)) return reply(c, action.user, 'PK 中的玩家不能投票。');
+      if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
+      s.votes[action.user] = action.target;
+      const choice = action.target === 'abstain' ? '你選擇棄票。' : `你投給了 ${mention(action.target)}。`;
+      c.events.push({ type: 'ephemeral', to: action.user, text: choice });
+      if (s.voters.every((v) => s.votes[v])) endVote(c);
+      return true;
+    }
     case 'timeout': {
-      if (s.phase === 'qa' && action.id === s.timers.step) advance(c);
+      if (action.id !== s.timers.step && action.id !== s.timers.remind && action.id !== s.timers.total) return false;
+      if (s.phase === 'vote' || s.phase === 'pkVote') endVote(c);
+      else if (s.phase === 'pkSpeech') nextSpeaker(c);
+      else if (s.phase === 'qa' && action.id === s.timers.step) advance(c);
       else if (s.phase === 'qa' && action.id === s.timers.remind) {
         c.events.push({ type: 'announce', text: '⏰ 提問時間剩下 1 分鐘！' });
         s.timers.remind = undefined;
@@ -296,6 +403,10 @@ function createLobby(prev: SState | undefined, host: string, channel: string): R
     phase: 'lobby',
     players: [{ id: host, alive: true }],
     timerSeq: prev?.timerSeq ?? 0,
+    votes: {},
+    candidates: [],
+    voters: [],
+    speakers: [],
     timers: {},
   };
   return { state: created, events: [lobbyEvent(created)] };

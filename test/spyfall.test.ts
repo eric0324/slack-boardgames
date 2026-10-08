@@ -180,3 +180,64 @@ describe('spyfall/rounds: 接力提問', () => {
     expect(end.state.phase).toBe('vote');
   });
 });
+
+const voting = () => run([{ type: 'endDiscussion', user: 'p1' }], started(4).state);
+const votes = (pairs: [string, string][], s: SState) =>
+  run(pairs.map(([user, target]) => ({ type: 'dayVote', user, target }) as SAction), s);
+
+describe('spyfall/rounds: 投票與 PK', () => {
+  it('進入投票：貼出所有玩家和棄票按鈕，60 秒', () => {
+    const { state, events } = voting();
+    expect(state.phase).toBe('vote');
+    const p = prompts(events, 'dayVote').at(-1)!;
+    expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'abstain']);
+    expect(timerOf(events, 60_000)).toBeDefined();
+  });
+
+  it('可以改票，全部投完立刻結束並公開每個人投給誰，得票最多的被指控', () => {
+    const s = votes([['p1', 'p2'], ['p1', 'p3'], ['p2', 'p3'], ['p3', 'p1']], voting().state).state;
+    expect(s.phase).toBe('vote');
+    const { events } = votes([['p4', 'abstain']], s);
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p1> → <@p3>');
+    expect(text).toContain('<@p4> → 棄票');
+    expect(text).toContain('<@p3> 被指控');
+  });
+
+  it('不在遊戲裡的人不能投票', () => {
+    const { state, events } = votes([['x', 'p1']], voting().state);
+    expect(state.votes).toEqual({});
+    expect(ephemeralTo(events, 'x')).toBeUndefined();
+  });
+
+  it('時間到沒投的算棄票', () => {
+    const v = voting();
+    const s = votes([['p1', 'p2']], v.state).state;
+    const { events } = run([{ type: 'timeout', id: timerOf(v.events, 60_000).id }], s);
+    expect(announces(events).join('\n')).toContain('<@p3> → 棄票');
+    expect(announces(events).join('\n')).toContain('<@p2> 被指控');
+  });
+
+  it('平票進入 PK：依序辯解 40 秒，接著只能投平手的人，平手的人不能投', () => {
+    const tie = votes([['p1', 'p2'], ['p2', 'p3'], ['p3', 'p2'], ['p4', 'p3']], voting().state);
+    expect(tie.state.phase).toBe('pkSpeech');
+    const speech = prompts(tie.events, 'endSpeech').at(-1)!;
+    expect(speech.text).toContain('<@p2>');
+    expect(timerOf(tie.events, 40_000)).toBeDefined();
+    const s1 = run([{ type: 'endSpeech', user: 'p2' }], tie.state);
+    expect(prompts(s1.events, 'endSpeech').at(-1)!.text).toContain('<@p3>');
+    const pk = run([{ type: 'endSpeech', user: 'p3' }], s1.state);
+    expect(pk.state.phase).toBe('pkVote');
+    expect(values(prompts(pk.events, 'pkVote').at(-1)!)).toEqual(['p2', 'p3', 'abstain']);
+    expect(ephemeralTo(votes([['p2', 'p3']], pk.state).events, 'p2')).toMatchObject({ text: expect.stringContaining('PK') });
+  });
+
+  it('PK 仍然平手或全部棄票：沒有抓到間諜', () => {
+    const tie = votes([['p1', 'p2'], ['p2', 'p3'], ['p3', 'p2'], ['p4', 'p3']], voting().state).state;
+    const pk = run([{ type: 'endSpeech', user: 'p2' }, { type: 'endSpeech', user: 'p3' }], tie).state;
+    const { events } = votes([['p1', 'p2'], ['p4', 'p3']], pk);
+    expect(announces(events).join('\n')).toContain('沒有抓到間諜');
+    const none = votes([['p1', 'abstain'], ['p2', 'abstain'], ['p3', 'abstain'], ['p4', 'abstain']], voting().state);
+    expect(announces(none.events).join('\n')).toContain('沒有抓到間諜');
+  });
+});
