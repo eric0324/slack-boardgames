@@ -7,6 +7,7 @@ export const MAX_COUP_PLAYERS = 6;
 const TITLE = '政變';
 const ACTION_MS = 60_000;
 const TARGET_MS = 30_000;
+const LOSE_MS = 30_000;
 
 export type KPhase = 'lobby' | 'action' | 'target' | 'lose' | 'ended';
 export type ActKind = 'income' | 'foreignAid' | 'coup' | 'tax' | 'assassinate' | 'steal' | 'exchange';
@@ -43,6 +44,8 @@ export interface KState {
   turn: number;
   pending?: { actor: string; kind: ActKind; target?: string };
   losing: string[]; // 等著選要翻開哪張牌的玩家
+  after: 'next'; // 翻完牌之後要做什麼
+  winner?: string;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -57,9 +60,11 @@ export type KAction =
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'act'; user: string; kind: ActKind }
   | { type: 'target'; user: string; target: string }
-  | { type: 'timeout'; id: number };
+  | { type: 'reveal'; user: string; index: number }
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<KAction, { type: 'new' }>;
+type GameAction = Exclude<KAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: KState;
@@ -216,10 +221,72 @@ function chooseTarget(c: Ctx, user: string, targetId: string): boolean {
 }
 
 // 失去影響力：依序讓玩家選要翻開哪張牌
-function loseInfluence(c: Ctx, ids: string[]) {
+function loseInfluence(c: Ctx, ids: string[], after: KState['after'] = 'next') {
   const s = c.s;
   s.phase = 'lose';
   s.losing = ids;
+  s.after = after;
+  promptLose(c);
+}
+
+const hidden = (p: KPlayer) => p.cards.map((x, i) => [x, i] as const).filter(([x]) => !x.revealed);
+
+function promptLose(c: Ctx) {
+  const s = c.s;
+  while (s.losing.length) {
+    const p = playerOf(s, s.losing[0]);
+    const cards = hidden(p);
+    if (!cards.length) {
+      s.losing.shift();
+      continue;
+    }
+    if (cards.length === 1) {
+      revealCard(c, p, cards[0][1]);
+      continue;
+    }
+    c.events.push({
+      type: 'prompt',
+      kind: 'loseCard',
+      audience: 'user',
+      user: p.id,
+      text: `😵 你要失去一個影響力，選一張牌翻開（${LOSE_MS / 1000} 秒）`,
+      options: cards.map(([x, i]) => ({ value: String(i), label: `翻開${ROLE_NAME[x.role]}` })),
+    });
+    c.events.push({ type: 'announce', text: `⏳ 等 ${mention(p.id)} 選一張牌翻開…` });
+    startTimer(c, LOSE_MS);
+    return;
+  }
+  afterLoss(c);
+}
+
+function revealCard(c: Ctx, p: KPlayer, index: number) {
+  const s = c.s;
+  p.cards[index].revealed = true;
+  c.events.push({ type: 'announce', text: `😵 ${mention(p.id)} 翻開了「${ROLE_NAME[p.cards[index].role]}」` });
+  if (!alive(p)) c.events.push({ type: 'announce', text: `💀 ${mention(p.id)} 出局！` });
+  s.losing.shift();
+}
+
+function afterLoss(c: Ctx) {
+  const s = c.s;
+  const living = s.players.filter(alive);
+  if (living.length === 1) {
+    endGame(c, living[0].id);
+    return;
+  }
+  nextTurn(c);
+}
+
+function endGame(c: Ctx, winner: string) {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  const roster = s.players.map((p) => `${mention(p.id)}：${p.cards.map((x) => ROLE_NAME[x.role]).join('、')}`).join('\n');
+  c.events.push(
+    { type: 'announce', text: `🏆 遊戲結束，${mention(winner)} 獲勝！\n${roster}`, gif: 'goodWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -296,8 +363,23 @@ function handle(c: Ctx, action: GameAction): boolean {
       return declare(c, action.user, action.kind);
     case 'target':
       return chooseTarget(c, action.user, action.target);
+    case 'reveal': {
+      if (s.phase !== 'lose' || action.user !== s.losing[0]) return false;
+      const p = playerOf(s, action.user);
+      if (!p.cards[action.index] || p.cards[action.index].revealed) return false;
+      revealCard(c, p, action.index);
+      promptLose(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'lose') {
+        const p = playerOf(s, s.losing[0]);
+        const cards = hidden(p);
+        revealCard(c, p, cards[Math.floor(c.rng() * cards.length)][1]);
+        promptLose(c);
+        return true;
+      }
       const others = () => s.players.filter((x) => x.id !== current(s).id && alive(x));
       if (s.phase === 'action') {
         if (current(s).coins < 10) return declare(c, current(s).id, 'income');
@@ -317,6 +399,15 @@ export function applyCoup(state: KState | undefined, action: KAction, rng: Rng):
     }
     return createLobby(state, action.user, action.channel);
   }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
@@ -333,6 +424,7 @@ function createLobby(prev: KState | undefined, host: string, channel: string): R
     deck: [],
     turn: 0,
     losing: [],
+    after: 'next',
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };

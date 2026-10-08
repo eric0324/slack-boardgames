@@ -156,3 +156,60 @@ describe('coup/turns: 行動', () => {
     expect(run([{ type: 'timeout', id: lastTimer(picking.events).id }], picking.state).state.phase).toBe('lose');
   });
 });
+
+const reveal = (user: string, index: number, s: KState) => run([{ type: 'reveal', user, index }], s);
+// p3 對 p1 政變
+const couped = (s: KState = coins(started(3).state, [2, 2, 7])) => target('p3', 'p1', act('p3', 'coup', s).state);
+const withCards = (s: KState, i: number, revealed: boolean[]): KState => ({
+  ...s,
+  players: s.players.map((p, k) => (k === i ? { ...p, cards: p.cards.map((x, j) => ({ ...x, revealed: revealed[j] })) } : p)),
+});
+
+describe('coup/turns: 失去影響力', () => {
+  it('私訊選要翻開哪張牌；翻開後公告，輪到下一位', () => {
+    const { state, events } = couped();
+    const p = prompts(events, 'loseCard').at(-1)!;
+    expect(p).toMatchObject({ audience: 'user', user: 'p1' });
+    expect(values(p)).toEqual(['0', '1']);
+    expect(lastTimer(events).ms).toBe(30_000);
+    const after = reveal('p1', 1, state);
+    expect(after.state.players[0].cards[1].revealed).toBe(true);
+    expect(announces(after.events).join('\n')).toContain('<@p1> 翻開了「公爵」');
+    expect(after.state).toMatchObject({ phase: 'action', turn: 0 });
+  });
+
+  it('只剩一張時自動翻開並出局；出局的人之後不會輪到', () => {
+    const { state, events } = couped(withCards(coins(started(3).state, [2, 2, 7]), 0, [true, false]));
+    expect(state.players[0].cards.every((x) => x.revealed)).toBe(true);
+    expect(announces(events).join('\n')).toContain('<@p1> 出局');
+    expect(state.turn).toBe(1);
+  });
+
+  it('只有要翻牌的人能選；30 秒超時隨機翻一張', () => {
+    const { state, events } = couped();
+    expect(reveal('p2', 0, state).state.phase).toBe('lose');
+    const after = run([{ type: 'timeout', id: lastTimer(events).id }], state);
+    expect(after.state.players[0].cards.filter((x) => x.revealed)).toHaveLength(1);
+  });
+});
+
+describe('coup/turns: 勝負', () => {
+  const won = () => couped(withCards(withCards(coins(started(3).state, [2, 2, 7]), 0, [true, false]), 1, [true, true]));
+
+  it('只剩一人：公告獲勝者和每個人的牌，貼出再來一局', () => {
+    const { state, events } = won();
+    expect(state).toMatchObject({ phase: 'ended', winner: 'p3' });
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('<@p3> 獲勝');
+    expect(text).toContain('<@p2>：公爵、刺客');
+    expect(prompts(events, 'rematch')).toHaveLength(1);
+  });
+
+  it('再來一局：上一局的真人玩家可以開新房間；取消的遊戲不能', () => {
+    const ended = won().state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], ended).state).toMatchObject({ phase: 'lobby', host: 'p2' });
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(3).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
