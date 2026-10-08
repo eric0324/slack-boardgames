@@ -1,7 +1,7 @@
 // 間諜危機遊戲引擎：純邏輯，不碰任何 I/O。介面和誰是臥底一樣：applySpyfall(state, action, rng) → { state, events }。
 import { randomBotName } from './botLines.js';
 import { isBot, mention, type GameEvent, type Rng } from './engine.js';
-import { LOCATIONS } from './spyfallLocations.js';
+import { LOCATIONS, QUESTIONS, SPY_ANSWERS } from './spyfallLocations.js';
 
 export const MIN_SPYFALL_PLAYERS = 4;
 export const MAX_SPYFALL_PLAYERS = 10;
@@ -11,6 +11,7 @@ const REMIND_MS = 60_000;
 const STEP_MS = 40_000;
 const VOTE_MS = 60_000;
 const GUESS_MS = 60_000;
+const BOT_CHAIN_LIMIT = 20; // bot 連續互問的上限，超過就改成等計時，避免無限接力
 
 export type SPhase = 'lobby' | 'qa' | 'vote' | 'pkSpeech' | 'pkVote' | 'lastGuess' | 'ended';
 
@@ -36,6 +37,7 @@ export interface SState {
   voters: string[];
   speakers: string[];
   speaker?: string;
+  usedAnswers: Record<string, string[]>;
   timers: { step?: number; remind?: number; total?: number };
 }
 
@@ -68,6 +70,7 @@ interface Ctx {
   s: SState;
   events: GameEvent[];
   rng: Rng;
+  botChain: number;
 }
 
 const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
@@ -146,6 +149,11 @@ const targetsOf = (s: SState) => s.players.map((p) => p.id).filter((id) => id !=
 function askNext(c: Ctx, asker: string, lastAsker: string | undefined) {
   const s = c.s;
   s.qa = { step: 'choose', asker, lastAsker };
+  if (isBot(asker)) {
+    if (c.botChain++ < BOT_CHAIN_LIMIT) ask(c, pick(targetsOf(s), c.rng));
+    else s.timers.step = startTimer(c, STEP_MS);
+    return;
+  }
   c.events.push({
     type: 'prompt',
     kind: 'askTarget',
@@ -160,6 +168,16 @@ function ask(c: Ctx, target: string) {
   const s = c.s;
   const qa = s.qa!;
   s.qa = { ...qa, step: 'answer', target };
+  const botAsks = () => {
+    if (isBot(qa.asker)) c.events.push({ type: 'announce', text: `${mention(qa.asker)}：${pick(QUESTIONS, c.rng)}` });
+  };
+  if (isBot(target)) {
+    c.events.push({ type: 'announce', text: `🎤 ${mention(qa.asker)} 問 ${mention(target)}` });
+    botAsks();
+    botAnswer(c, target);
+    askNext(c, target, qa.asker);
+    return;
+  }
   c.events.push({
     type: 'prompt',
     kind: 'endAnswer',
@@ -167,7 +185,42 @@ function ask(c: Ctx, target: string) {
     text: `🎤 ${mention(qa.asker)} 問 ${mention(target)}（${STEP_MS / 1000} 秒）`,
     options: [{ value: target, label: '回答完畢' }],
   });
+  botAsks();
   s.timers.step = startTimer(c, STEP_MS);
+}
+
+// bot 回答：平民用這局地點的描述句，間諜用模糊的回答（同一位 bot 盡量不重複）
+function botAnswer(c: Ctx, id: string) {
+  const s = c.s;
+  const me = s.players.find((p) => p.id === id)!;
+  const pool = me.role === 'spy' ? SPY_ANSWERS : LOCATIONS.find((l) => l.name === s.location)!.hints;
+  const used = (s.usedAnswers[id] ??= []);
+  const fresh = pool.filter((h) => !used.includes(h));
+  const line = pick(fresh.length ? fresh : pool, c.rng);
+  used.push(line);
+  c.events.push({ type: 'announce', text: `${mention(id)}：${line}` });
+}
+
+// 找出下一個輪到 bot 的行動：投票（不投自己、不棄票）、PK 辯解、被指控的間諜猜地點
+function nextBotAction(s: SState, rng: Rng): GameAction | null {
+  if (s.phase === 'vote' || s.phase === 'pkVote') {
+    const voter = s.voters.find((v) => isBot(v) && !s.votes[v]);
+    if (voter) {
+      const choices = s.candidates.filter((id) => id !== voter);
+      return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
+    }
+  }
+  if (s.phase === 'pkSpeech' && s.speaker && isBot(s.speaker)) return { type: 'endSpeech', user: s.speaker };
+  const spy = s.players.find((p) => p.role === 'spy');
+  if (s.phase === 'lastGuess' && spy && isBot(spy.id)) return { type: 'guess', user: spy.id, location: pick(LOCATIONS, rng).name };
+  return null;
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+  }
 }
 
 // 推進卡住的步驟：還沒選人就隨機選，正在回答就換被問的人提問
@@ -399,6 +452,7 @@ function handle(c: Ctx, action: GameAction): boolean {
     case 'endSpeech': {
       if (s.phase !== 'pkSpeech') return false;
       if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      if (isBot(action.user)) c.events.push({ type: 'announce', text: `${mention(action.user)}：我真的不是間諜，相信我！` });
       nextSpeaker(c);
       return true;
     }
@@ -452,8 +506,9 @@ export function applySpyfall(state: SState | undefined, action: SAction, rng: Rn
     return createLobby(state, action.user, action.channel);
   }
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
-  const c: Ctx = { s: structuredClone(state), events: [], rng };
+  const c: Ctx = { s: structuredClone(state), events: [], rng, botChain: 0 };
   const changed = handle(c, action);
+  if (changed) runBots(c);
   return { state: changed ? c.s : state, events: c.events };
 }
 
@@ -469,6 +524,7 @@ function createLobby(prev: SState | undefined, host: string, channel: string): R
     candidates: [],
     voters: [],
     speakers: [],
+    usedAnswers: {},
     timers: {},
   };
   return { state: created, events: [lobbyEvent(created)] };

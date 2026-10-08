@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mention, type GameEvent } from '../src/engine.js';
 import { applySpyfall, type SAction, type SState } from '../src/spyfall.js';
-import { LOCATIONS } from '../src/spyfallLocations.js';
+import { LOCATIONS, QUESTIONS, SPY_ANSWERS } from '../src/spyfallLocations.js';
 
 const rng = () => 0.99999;
 
@@ -336,5 +336,89 @@ describe('spyfall/win-condition: 勝負與結束公開', () => {
     expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
     const cancelled = run([{ type: 'cancel', user: 'p1' }], started(4).state).state;
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
+
+// rng 固定為 0：p1（真人）是間諜、地點是公司尾牙、p1 先提問
+const zero = () => 0;
+const withBots = (bots = 3) => run([{ type: 'addBot', user: 'p1', count: bots }, { type: 'start', user: 'p1' }], lobbyWith(1).state, zero);
+const botN = (s: SState, n: number) => s.players.find((p) => p.id.startsWith(`bot:${n}:`))!.id;
+const botSays = (events: GameEvent[], id: string) =>
+  announces(events).filter((t) => t.startsWith(`${mention(id)}：`)).map((t) => t.slice(`${mention(id)}：`.length));
+const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+const hintsOf = (name: string) => LOCATIONS.find((l) => l.name === name)!.hints;
+
+describe('spyfall/bots: bot 提問與回答', () => {
+  it('平民 bot 被問時立刻用地點描述句回答，接著立刻替 bot 隨機問一位，問到真人就等真人回答', () => {
+    const { state } = withBots();
+    const bot1 = botN(state, 1);
+    const { state: s, events } = run([{ type: 'askTarget', user: 'p1', target: bot1 }], state, zero);
+    const lines = botSays(events, bot1);
+    expect(lines.some((l) => hintsOf('公司尾牙').includes(l))).toBe(true);
+    expect(lines.some((l) => QUESTIONS.includes(l))).toBe(true);
+    for (const l of lines) expect(l).not.toContain('公司尾牙');
+    expect(s.qa).toMatchObject({ step: 'answer', target: 'p1' });
+    expect(prompts(events, 'endAnswer').at(-1)!.options).toEqual([{ value: 'p1', label: '回答完畢' }]);
+  });
+
+  it('間諜 bot 被問時用通用的模糊回答', () => {
+    const { state } = withBots();
+    const bot1 = botN(state, 1);
+    const patched: SState = {
+      ...state,
+      players: state.players.map((p) => (p.id === bot1 ? { ...p, role: 'spy' } : p.id === 'p1' ? { ...p, role: 'civilian', job: '老闆' } : p)),
+    };
+    const lines = botSays(run([{ type: 'askTarget', user: 'p1', target: bot1 }], patched, zero).events, bot1);
+    expect(lines.some((l) => SPY_ANSWERS.includes(l))).toBe(true);
+  });
+
+  it('同一位 bot 的回答盡量不重複', () => {
+    const { state } = withBots();
+    const bot1 = botN(state, 1);
+    const first = run([{ type: 'askTarget', user: 'p1', target: bot1 }], state, zero);
+    const again = run([{ type: 'askTarget', user: 'p1', target: bot1 }], { ...first.state, qa: { step: 'choose', asker: 'p1' } }, zero);
+    expect(botSays(first.events, bot1)[0]).not.toBe(botSays(again.events, bot1)[0]);
+  });
+});
+
+describe('spyfall/bots: bot 投票與猜地點', () => {
+  it('進入投票時，每個 bot 立刻投給一位不是自己的玩家', () => {
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], withBots().state, zero).state;
+    for (const p of vote.players.filter((x) => x.id.startsWith('bot:'))) {
+      expect(vote.votes[p.id]).toBeDefined();
+      expect(vote.votes[p.id]).not.toBe(p.id);
+      expect(vote.votes[p.id]).not.toBe('abstain');
+    }
+  });
+
+  it('間諜 bot 被指控時立刻猜一個地點，遊戲結束', () => {
+    const { state } = withBots();
+    const bot1 = botN(state, 1);
+    const patched: SState = {
+      ...state,
+      players: state.players.map((p) => (p.id === bot1 ? { ...p, role: 'spy' } : p.id === 'p1' ? { ...p, role: 'civilian', job: '老闆' } : p)),
+    };
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], patched, zero).state;
+    const rigged: SState = { ...vote, votes: Object.fromEntries(Object.keys(vote.votes).map((v) => [v, v === bot1 ? 'p1' : bot1])) };
+    const { state: end, events } = votes([['p1', bot1]], rigged);
+    expect(announces(events).some((t) => t.includes(`${mention(bot1)} 猜「`))).toBe(true);
+    expect(end.phase).toBe('ended');
+  });
+
+  it('1 位真人加 bot、真人什麼都不做，遊戲一定會結束，而且 bot 不會在提問中主動猜', () => {
+    for (const bots of [3, 5, 9]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = seeded(seed);
+        let res = run([{ type: 'addBot', user: 'p1', count: bots }, { type: 'start', user: 'p1' }], lobbyWith(1).state, r);
+        for (let step = 0; step < 500 && res.state.phase !== 'ended'; step++) {
+          const t = res.state.timers;
+          const id = step % 10 === 9 ? (t.total ?? t.remind ?? t.step) : (t.step ?? t.total ?? t.remind);
+          const before = res.state.phase;
+          res = applySpyfall(res.state, { type: 'timeout', id: id! }, r);
+          if (before === 'qa') expect(announces(res.events).some((x) => x.includes('猜「'))).toBe(false);
+        }
+        expect(res.state.phase, `${bots} bots, seed ${seed}`).toBe('ended');
+      }
+    }
   });
 });
