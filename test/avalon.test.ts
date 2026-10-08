@@ -329,3 +329,48 @@ describe('avalon/rounds: 出任務', () => {
     expect(announces(two.events).join('\n')).toContain('任務 4 失敗（2 張失敗票）');
   });
 });
+
+// 5 人局玩一個任務：成功的隊伍只放好人，失敗的隊伍放刺客 p4 並出失敗
+const SIZES5 = [2, 3, 2, 3, 3];
+function playQuest(s: AState, fail: boolean) {
+  const st = finishSpeech(s).state;
+  const leader = st.players[st.leader].id;
+  const size = SIZES5[st.quest];
+  const team = (fail ? ['p4', 'p1', 'p2', 'p3'] : ['p1', 'p2', 'p3']).slice(0, size);
+  const q = approveAll(run([{ type: 'confirmTeam', user: leader }], pick(team, st, leader).state).state).state;
+  return cards(team.map((id) => [id, fail && id === 'p4' ? 'fail' : 'success'] as [string, 'success' | 'fail']), q);
+}
+const playQuests = (pattern: boolean[]) => {
+  let res = started(5);
+  for (const fail of pattern) res = playQuest(res.state, fail);
+  return res;
+};
+const rejectAll = (s: AState) => {
+  const st = finishSpeech(s).state;
+  const leader = st.players[st.leader].id;
+  const full = pick(['p1', 'p2', 'p3'].slice(0, SIZES5[st.quest]), st, leader).state;
+  const v = run([{ type: 'confirmTeam', user: leader }], full).state;
+  return teamVotes(v.players.map((p) => [p.id, 'reject'] as [string, 'reject']), v);
+};
+
+describe('avalon/win-condition: 勝負判定', () => {
+  it('3 個任務失敗：壞人獲勝', () => {
+    const { state } = playQuests([true, false, true, true]);
+    expect(state).toMatchObject({ phase: 'ended', winner: 'evil' });
+  });
+
+  it('同一個任務連續 5 次被否決：壞人獲勝', () => {
+    let res = started(5);
+    for (let i = 0; i < 4; i++) res = rejectAll(res.state);
+    expect(res.state).toMatchObject({ phase: 'speech', rejects: 4 });
+    res = rejectAll(res.state);
+    expect(res.state).toMatchObject({ phase: 'ended', winner: 'evil' });
+  });
+
+  it('3 個任務成功：進入刺殺階段，公開所有壞人', () => {
+    const { state, events } = playQuests([false, true, false, false]);
+    expect(state.phase).toBe('assassinate');
+    expect(announces(events).join('\n')).toContain('刺殺');
+    expect(announces(events).join('\n')).toContain('<@p4>、<@p5>');
+  });
+});

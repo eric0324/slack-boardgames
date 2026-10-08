@@ -50,6 +50,7 @@ export interface AState {
   cards: Record<string, 'success' | 'fail'>;
   speakers: string[];
   speaker?: string;
+  winner?: 'good' | 'evil';
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -240,6 +241,11 @@ function endTeamVote(c: Ctx) {
   }
   s.rejects++;
   c.events.push({ type: 'announce', text: `❌ 隊伍被否決（${approvals} 票贊成），連續否決 ${s.rejects}／${MAX_REJECTS}。` });
+  if (s.rejects >= MAX_REJECTS) {
+    c.events.push({ type: 'announce', text: `😈 連續 ${MAX_REJECTS} 次組隊都沒通過，王國陷入混亂！` });
+    endGame(c, 'evil');
+    return;
+  }
   nextLeader(c);
 }
 
@@ -274,7 +280,29 @@ function endQuest(c: Ctx) {
     text: `${result === 'success' ? '🎉' : '💥'} 任務 ${s.quest + 1} ${result === 'success' ? '成功' : '失敗'}（${fails} 張失敗票）`,
   });
   s.quest++;
-  nextLeader(c);
+  const count = (r: string) => s.results.filter((x) => x === r).length;
+  if (count('fail') >= 3) endGame(c, 'evil');
+  else if (count('success') >= 3) startAssassination(c);
+  else nextLeader(c);
+}
+
+// 好人完成 3 個任務：公開壞人，刺客可以刺殺梅林
+function startAssassination(c: Ctx) {
+  const s = c.s;
+  s.phase = 'assassinate';
+  s.timers = {};
+  const evilIds = s.players.filter((p) => isEvil(p.role)).map((p) => p.id);
+  c.events.push({
+    type: 'announce',
+    text: `🗡️ 好人完成了 3 個任務！但壞人還有最後機會：壞人是 ${list(evilIds)}，刺客正在和同伴討論要刺殺誰，刺中梅林壞人就逆轉獲勝。`,
+  });
+}
+
+function endGame(c: Ctx, winner: 'good' | 'evil') {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
 }
 
 function nextLeader(c: Ctx) {
