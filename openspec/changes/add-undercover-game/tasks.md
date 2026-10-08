@@ -23,7 +23,7 @@
 
 ## 5. 誰是臥底 engine：bot
 
-- [ ] 5.1 bot 描述（依詞庫描述句、白板 bot 用通用台詞、同一局盡量不重複）、bot 投票、白板 bot 猜詞，確認 undercover/bots 的 scenarios 測試通過，並用多組隨機種子確認 1 真人＋bot 的整局一定會結束
+- [x] 5.1 bot 描述（依詞庫描述句、白板 bot 用通用台詞、同一局盡量不重複）、bot 投票、白板 bot 猜詞，確認 undercover/bots 的 scenarios 測試通過，並用多組隨機種子確認 1 真人＋bot 的整局一定會結束
 
 ## 6. Slack adapter 與 /game
 

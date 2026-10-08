@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { GameEvent } from '../src/engine.js';
+import { mention, type GameEvent } from '../src/engine.js';
 import { applyUndercover, UNDERCOVER_TABLE, type UAction, type UState } from '../src/undercover.js';
-import { WORD_PAIRS } from '../src/undercoverWords.js';
+import { BLANK_LINES, WORD_PAIRS } from '../src/undercoverWords.js';
 
 const rng = () => 0.99999;
 
@@ -360,5 +360,90 @@ describe('undercover/win-condition: 結束公開與再來一局', () => {
     expect(ephemeralTo(outsider.events, 'X')).toBeDefined();
     const cancelled = run([{ type: 'cancel', user: 'p1' }], startedU(4).state).state;
     expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
+
+// 1 真人 + 5 bot：p1 臥底、bot1 白板、bot2~bot5 平民；第一輪從 bot5 開始 → bot5 描述完輪到 p1
+const withBotsU = () => run([{ type: 'addBot', user: 'p1', count: 5 }, { type: 'start', user: 'p1' }], lobbyWith(1).state);
+const botN = (s: UState, n: number) => s.players.find((p) => p.id.startsWith(`bot:${n}:`))!.id;
+const botSays = (events: GameEvent[], id: string) => announces(events).filter((t) => t.startsWith(`${mention(id)}：`));
+const seededU = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+
+describe('undercover/bots: bot 描述', () => {
+  it('平民 bot 用自己詞的描述句，裡面沒有出現兩個詞，接著立刻換下一位', () => {
+    const { state, events } = withBotsU();
+    const bot5 = botN(state, 5);
+    const [line] = botSays(events, bot5);
+    const hints = WORD_PAIRS.flatMap(({ a, b }) => [a, b]).find((w) => w.word === state.words!.civilian)!.hints;
+    expect(hints.some((h) => line.endsWith(h))).toBe(true);
+    expect(line).not.toContain(state.words!.civilian);
+    expect(line).not.toContain(state.words!.undercover);
+    expect(state.speaker).toBe('p1');
+  });
+
+  it('白板 bot 說通用的模糊台詞', () => {
+    const { state } = withBotsU();
+    const { events } = run([{ type: 'endSpeech', user: 'p1' }], state);
+    const [line] = botSays(events, botN(state, 1));
+    expect(BLANK_LINES.some((l) => line.endsWith(l))).toBe(true);
+  });
+
+  it('同一局同一位 bot 的描述盡量不重複', () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      const r = seededU(seed);
+      let s = applyUndercover(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+      s = applyUndercover(s, { type: 'addBot', user: 'p1', count: 11 }, r).state;
+      let res = applyUndercover(s, { type: 'start', user: 'p1' }, r);
+      const said: Record<string, string[]> = {};
+      for (let step = 0; step < 300; step++) {
+        for (const t of announces(res.events)) {
+          const m = /^(🤖\S+)：(.*)$/.exec(t);
+          if (m && !t.includes('猜')) (said[m[1]] ??= []).push(m[2]);
+        }
+        if (res.state.phase === 'ended') break;
+        res = applyUndercover(res.state, { type: 'timeout', id: res.state.timers.phase! }, r);
+      }
+      for (const lines of Object.values(said)) {
+        const first3 = lines.slice(0, 3);
+        expect(new Set(first3).size, `seed ${seed}`).toBe(first3.length);
+      }
+    }
+  });
+});
+
+describe('undercover/bots: bot 投票與猜詞', () => {
+  it('進入投票時，每個存活的 bot 立刻投給一位不是自己的候選人', () => {
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], withBotsU().state).state;
+    for (const p of vote.players.filter((x) => x.id.startsWith('bot:'))) {
+      expect(vote.votes[p.id]).toBeDefined();
+      expect(vote.votes[p.id]).not.toBe(p.id);
+      expect(vote.votes[p.id]).not.toBe('abstain');
+    }
+  });
+
+  it('白板 bot 被放逐時立刻猜詞（從平民詞、臥底詞、另一個隨機的詞中選）', () => {
+    const vote = run([{ type: 'endDiscussion', user: 'p1' }], withBotsU().state).state;
+    const blank = botN(vote, 1);
+    // 讓白板 bot 被放逐：真人也投給白板 bot，再把 bot 的票都改成投白板 bot
+    const patched: UState = { ...vote, votes: Object.fromEntries(Object.keys(vote.votes).map((v) => [v, v === blank ? 'p1' : blank])) };
+    const { state, events } = run(votes([['p1', blank]]), patched);
+    const guess = announces(events).find((t) => t.startsWith(`🎯 ${mention(blank)}`) || t.startsWith(`${mention(blank)} 猜`))!;
+    expect(guess).toBeDefined();
+    expect(state.phase).not.toBe('guess');
+  });
+
+  it('1 位真人加 bot、真人什麼都不做，遊戲一定會結束', () => {
+    for (const bots of [3, 5, 11]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = seededU(seed);
+        let s = applyUndercover(undefined, { type: 'new', user: 'p1', channel: 'C1' }, r).state;
+        s = applyUndercover(s, { type: 'addBot', user: 'p1', count: bots }, r).state;
+        s = applyUndercover(s, { type: 'start', user: 'p1' }, r).state;
+        for (let step = 0; step < 500 && s.phase !== 'ended'; step++) {
+          s = applyUndercover(s, { type: 'timeout', id: s.timers.phase! }, r).state;
+        }
+        expect(s.phase, `${bots} bots, seed ${seed}`).toBe('ended');
+      }
+    }
   });
 });

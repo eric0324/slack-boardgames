@@ -2,7 +2,7 @@
 // events 沿用狼人殺的 GameEvent，adapter 的 send() 可以共用。
 import { randomBotName } from './botLines.js';
 import { isBot, MAX_PLAYERS, mention, type GameEvent, type Rng } from './engine.js';
-import { WORD_PAIRS } from './undercoverWords.js';
+import { BLANK_LINES, WORD_PAIRS } from './undercoverWords.js';
 
 export const MIN_UNDERCOVER_PLAYERS = 4;
 export const SPEECH_MS = 40_000;
@@ -51,6 +51,7 @@ export interface UState {
   candidates: string[];
   voters: string[];
   guesser?: string; // 正在猜詞的白板
+  usedHints: Record<string, string[]>; // bot 這一局已經說過的描述句
   winner?: 'civilian' | 'undercover';
 }
 
@@ -170,9 +171,42 @@ function nextSpeaker(c: Ctx) {
   startVote(c);
 }
 
-// 先放一句通用台詞，task 5.1 會改成依詞庫描述
+const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
+const hintsOf = (word: string) => WORD_PAIRS.flatMap(({ a, b }) => [a, b]).find((w) => w.word === word)?.hints ?? [];
+
+// bot 描述：平民和臥底用自己詞的描述句（盡量不重複），白板用通用的模糊台詞
 function botDescribe(c: Ctx, id: string) {
-  c.events.push({ type: 'announce', text: `${mention(id)}：……` });
+  const s = c.s;
+  const me = s.players.find((p) => p.id === id)!;
+  const pool = me.word ? hintsOf(me.word) : BLANK_LINES;
+  const used = (s.usedHints[id] ??= []);
+  const fresh = pool.filter((h) => !used.includes(h));
+  const line = pick(fresh.length ? fresh : pool, c.rng);
+  used.push(line);
+  c.events.push({ type: 'announce', text: `${mention(id)}：${line}` });
+}
+
+// 找出下一個輪到 bot 的行動：投票（不投自己、不棄票）或白板猜詞
+function nextBotAction(s: UState, rng: Rng): Exclude<UAction, { type: 'new' } | { type: 'rematch' }> | null {
+  if (s.phase === 'vote' || s.phase === 'pkVote') {
+    const voter = s.voters.find((v) => isBot(v) && !s.votes[v]);
+    if (voter) {
+      const choices = s.candidates.filter((id) => id !== voter);
+      return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
+    }
+  }
+  if (s.phase === 'guess' && s.guesser && isBot(s.guesser)) {
+    const others = WORD_PAIRS.flatMap(({ a, b }) => [a.word, b.word]).filter((w) => w !== s.words!.civilian && w !== s.words!.undercover);
+    return { type: 'guess', user: s.guesser, word: pick([s.words!.civilian, s.words!.undercover, pick(others, rng)], rng) };
+  }
+  return null;
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+  }
 }
 
 function startVote(c: Ctx) {
@@ -447,6 +481,7 @@ export function applyUndercover(state: UState | undefined, action: UAction, rng:
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
+  if (changed) runBots(c);
   return { state: changed ? c.s : state, events: c.events };
 }
 
@@ -460,6 +495,7 @@ function createLobby(prev: UState | undefined, host: string, channel: string): R
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
     round: 0,
+    usedHints: {},
     speakers: [],
     votes: {},
     candidates: [],
