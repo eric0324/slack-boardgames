@@ -227,3 +227,50 @@ describe('avalon/rounds: 隊長選人', () => {
     expect(after.state.team).toContain('p1');
   });
 });
+
+// 5 人局：隊長 p5 提出 p1、p2
+const teamVoting = () => run([{ type: 'confirmTeam', user: 'p5' }], pick(['p1', 'p2'], picking().state).state);
+const teamVotes = (pairs: [string, 'approve' | 'reject'][], s: AState) =>
+  run(pairs.map(([user, vote]) => ({ type: 'teamVote', user, vote }) as AAction), s);
+
+describe('avalon/rounds: 組隊投票', () => {
+  it('所有人收到贊成／反對按鈕，60 秒', () => {
+    const { events } = teamVoting();
+    expect(values(prompts(events, 'teamVote').at(-1)!)).toEqual(['approve', 'reject']);
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('可以改票，全部投完立刻結束並公開每個人的投票；過半通過進入出任務，否決次數歸零', () => {
+    const s = teamVotes([['p1', 'reject'], ['p1', 'approve'], ['p2', 'approve'], ['p3', 'reject'], ['p4', 'reject']], teamVoting().state).state;
+    expect(s.phase).toBe('teamVote');
+    const { state, events } = teamVotes([['p5', 'approve']], { ...s, rejects: 2 });
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p1> → 👍 贊成');
+    expect(text).toContain('<@p3> → 👎 反對');
+    expect(text).toContain('隊伍通過');
+    expect(state).toMatchObject({ phase: 'quest', rejects: 0 });
+  });
+
+  it('不在遊戲裡的人不能投', () => {
+    expect(teamVotes([['x', 'approve']], teamVoting().state).state.votes).toEqual({});
+  });
+
+  it('沒過半（含平手）就否決：否決次數加 1，換下一位隊長重新組隊', () => {
+    const { state, events } = teamVotes([['p1', 'approve'], ['p2', 'approve'], ['p3', 'reject'], ['p4', 'reject'], ['p5', 'reject']], teamVoting().state);
+    expect(announces(events).join('\n')).toContain('隊伍被否決');
+    expect(state).toMatchObject({ phase: 'speech', rejects: 1, quest: 0 });
+    expect(announces(events).join('\n')).toContain('隊長 <@p1>');
+    const six = finishSpeech(started(6).state).state;
+    const sixVote = run([{ type: 'confirmTeam', user: 'p6' }], pick(['p1', 'p2'], six, 'p6').state).state;
+    const tie = teamVotes([['p1', 'approve'], ['p2', 'approve'], ['p3', 'approve'], ['p4', 'reject'], ['p5', 'reject'], ['p6', 'reject']], sixVote);
+    expect(tie.state.rejects).toBe(1);
+  });
+
+  it('時間到沒投的算贊成', () => {
+    const v = teamVoting();
+    const s = teamVotes([['p1', 'reject'], ['p2', 'reject']], v.state).state;
+    const { state, events } = run([{ type: 'timeout', id: lastTimer(v.events).id }], s);
+    expect(announces(events).join('\n')).toContain('<@p3> → 👍 贊成');
+    expect(state.phase).toBe('quest');
+  });
+});

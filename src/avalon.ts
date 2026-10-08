@@ -7,6 +7,7 @@ export const MAX_AVALON_PLAYERS = 10;
 const TITLE = '阿瓦隆';
 const SPEECH_MS = 40_000;
 const PICK_MS = 90_000;
+const VOTE_MS = 60_000;
 const MAX_REJECTS = 5;
 
 // 人數 → 5 個任務的隊伍人數；7 人以上第 4 個任務要 2 張失敗票
@@ -44,6 +45,7 @@ export interface AState {
   results: ('success' | 'fail')[];
   rejects: number; // 這個任務連續被否決幾次
   team: string[];
+  votes: Record<string, 'approve' | 'reject'>;
   speakers: string[];
   speaker?: string;
   timerSeq: number;
@@ -62,6 +64,7 @@ export type AAction =
   | { type: 'skipSpeaker'; user: string }
   | { type: 'pickMember'; user: string; target: string }
   | { type: 'confirmTeam'; user: string }
+  | { type: 'teamVote'; user: string; vote: 'approve' | 'reject' }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<AAction, { type: 'new' }>;
@@ -205,6 +208,41 @@ function submitTeam(c: Ctx) {
   s.team = s.players.map((p) => p.id).filter((id) => s.team.includes(id));
   c.events.push({ type: 'announce', text: `🛡️ ${mention(leaderOf(s))} 提出的隊伍：${list(s.team)}` });
   s.phase = 'teamVote';
+  s.votes = {};
+  c.events.push({
+    type: 'prompt',
+    kind: 'teamVote',
+    audience: 'channel',
+    text: `🗳️ 同意這支隊伍出任務嗎？所有人都要投（${VOTE_MS / 1000} 秒，沒投的算贊成）`,
+    options: [
+      { value: 'approve', label: '👍 贊成' },
+      { value: 'reject', label: '👎 反對' },
+    ],
+  });
+  startTimer(c, VOTE_MS);
+}
+
+// 組隊投票結束：公開每個人的票，過半通過就出任務，否則換下一位隊長
+function endTeamVote(c: Ctx) {
+  const s = c.s;
+  const votes = s.players.map((p) => [p.id, s.votes[p.id] ?? 'approve'] as const);
+  const lines = votes.map(([id, v]) => `${mention(id)} → ${v === 'approve' ? '👍 贊成' : '👎 反對'}`);
+  const approvals = votes.filter(([, v]) => v === 'approve').length;
+  c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
+  if (approvals * 2 > s.players.length) {
+    s.rejects = 0;
+    c.events.push({ type: 'announce', text: `✅ 隊伍通過（${approvals} 票贊成），${list(s.team)} 出任務！` });
+    s.phase = 'quest';
+    return;
+  }
+  s.rejects++;
+  c.events.push({ type: 'announce', text: `❌ 隊伍被否決（${approvals} 票贊成），連續否決 ${s.rejects}／${MAX_REJECTS}。` });
+  nextLeader(c);
+}
+
+function nextLeader(c: Ctx) {
+  c.s.leader = (c.s.leader + 1) % c.s.players.length;
+  startRound(c);
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -308,8 +346,19 @@ function handle(c: Ctx, action: GameAction): boolean {
       submitTeam(c);
       return true;
     }
+    case 'teamVote': {
+      if (s.phase !== 'teamVote' || !s.players.some((p) => p.id === action.user)) return false;
+      s.votes[action.user] = action.vote;
+      reply(c, action.user, action.vote === 'approve' ? '你投了贊成。' : '你投了反對。');
+      if (s.players.every((p) => s.votes[p.id])) endTeamVote(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'teamVote') {
+        endTeamVote(c);
+        return true;
+      }
       if (s.phase === 'speech') nextSpeaker(c);
       else if (s.phase === 'pick') {
         const rest = shuffle(s.players.map((p) => p.id).filter((id) => !s.team.includes(id)), c.rng);
@@ -347,6 +396,7 @@ function createLobby(prev: AState | undefined, host: string, channel: string): R
     results: [],
     rejects: 0,
     team: [],
+    votes: {},
     speakers: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
