@@ -4,7 +4,7 @@
 
 ## 1. 地點庫
 
-- [ ] 1.1 新增 `src/spyfallLocations.ts`：至少 30 個地點、每個地點至少 6 個角色和 4 句描述句，加上 bot 用的通用問題和間諜 bot 的通用回答；確認 spyfall/setup「地點庫」的 scenarios 測試通過
+- [x] 1.1 新增 `src/spyfallLocations.ts`：至少 30 個地點、每個地點至少 6 個角色和 4 句描述句，加上 bot 用的通用問題和間諜 bot 的通用回答；確認 spyfall/setup「地點庫」的 scenarios 測試通過
 
 ## 2. 間諜危機 engine：房間與發牌
 
