@@ -274,3 +274,58 @@ describe('avalon/rounds: 組隊投票', () => {
     expect(state.phase).toBe('quest');
   });
 });
+
+const approveAll = (s: AState) => teamVotes(s.players.map((p) => [p.id, 'approve'] as [string, 'approve']), s);
+// 5 人局：p1（梅林）和 p4（刺客）出任務
+const questing = () => approveAll(run([{ type: 'confirmTeam', user: 'p5' }], pick(['p1', 'p4'], picking().state).state).state);
+const cards = (pairs: [string, 'success' | 'fail'][], s: AState) =>
+  run(pairs.map(([user, card]) => ({ type: 'quest', user, card }) as AAction), s);
+
+describe('avalon/rounds: 出任務', () => {
+  it('私訊隊員出任務按鈕：好人只有成功，壞人有成功和失敗，60 秒', () => {
+    const { events } = questing();
+    const qs = prompts(events, 'quest');
+    expect(qs.map((q) => q.user)).toEqual(['p1', 'p4']);
+    expect(qs.every((q) => q.audience === 'user')).toBe(true);
+    expect(values(qs[0])).toEqual(['success']);
+    expect(values(qs[1])).toEqual(['success', 'fail']);
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('全部出完立刻結束，只公開失敗票數；接著換下一位隊長進行下一個任務', () => {
+    const s = cards([['p4', 'fail']], questing().state).state;
+    expect(s.phase).toBe('quest');
+    const { state, events } = cards([['p1', 'success']], s);
+    const result = announces(events).find((t) => t.includes('任務 1'))!;
+    expect(result).toContain('任務 1 失敗（1 張失敗票）');
+    expect(result).not.toContain('<@p4>');
+    expect(state).toMatchObject({ results: ['fail'], quest: 1, phase: 'speech' });
+    expect(announces(events).join('\n')).toContain('隊長 <@p1>');
+  });
+
+  it('不是隊員、已經出過、好人出失敗都不算', () => {
+    const s = questing().state;
+    expect(ephemeralTo(cards([['p3', 'success']], s).events, 'p3')).toBeDefined();
+    const once = cards([['p4', 'success']], s).state;
+    expect(ephemeralTo(cards([['p4', 'fail']], once).events, 'p4')).toBeDefined();
+    expect(cards([['p1', 'fail']], s).state.cards).toEqual({});
+  });
+
+  it('時間到沒出的算成功', () => {
+    const q = questing();
+    const { state } = run([{ type: 'timeout', id: lastTimer(q.events).id }], q.state);
+    expect(state.results).toEqual(['success']);
+  });
+
+  it('7 人以上第 4 個任務要 2 張失敗票才失敗', () => {
+    // 7 人局：p5 刺客、p6 莫甘娜，隊長 p7，第 4 個任務 4 人
+    const s = finishSpeech(run([{ type: 'start', user: 'p1' }], lobbyWith(7).state).state).state;
+    expect(s.leader).toBe(6);
+    const atFour = { ...s, quest: 3, results: ['success', 'fail', 'success'] as ('success' | 'fail')[] };
+    const q = approveAll(run([{ type: 'confirmTeam', user: 'p7' }], pick(['p1', 'p2', 'p5', 'p6'], atFour, 'p7').state).state).state;
+    const one = cards([['p1', 'success'], ['p2', 'success'], ['p5', 'fail'], ['p6', 'success']], q);
+    expect(announces(one.events).join('\n')).toContain('任務 4 成功（1 張失敗票）');
+    const two = cards([['p1', 'success'], ['p2', 'success'], ['p5', 'fail'], ['p6', 'fail']], q);
+    expect(announces(two.events).join('\n')).toContain('任務 4 失敗（2 張失敗票）');
+  });
+});

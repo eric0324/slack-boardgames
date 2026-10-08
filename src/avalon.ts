@@ -8,6 +8,7 @@ const TITLE = '阿瓦隆';
 const SPEECH_MS = 40_000;
 const PICK_MS = 90_000;
 const VOTE_MS = 60_000;
+const QUEST_MS = 60_000;
 const MAX_REJECTS = 5;
 
 // 人數 → 5 個任務的隊伍人數；7 人以上第 4 個任務要 2 張失敗票
@@ -46,6 +47,7 @@ export interface AState {
   rejects: number; // 這個任務連續被否決幾次
   team: string[];
   votes: Record<string, 'approve' | 'reject'>;
+  cards: Record<string, 'success' | 'fail'>;
   speakers: string[];
   speaker?: string;
   timerSeq: number;
@@ -65,6 +67,7 @@ export type AAction =
   | { type: 'pickMember'; user: string; target: string }
   | { type: 'confirmTeam'; user: string }
   | { type: 'teamVote'; user: string; vote: 'approve' | 'reject' }
+  | { type: 'quest'; user: string; card: 'success' | 'fail' }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<AAction, { type: 'new' }>;
@@ -231,12 +234,46 @@ function endTeamVote(c: Ctx) {
   c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
   if (approvals * 2 > s.players.length) {
     s.rejects = 0;
-    c.events.push({ type: 'announce', text: `✅ 隊伍通過（${approvals} 票贊成），${list(s.team)} 出任務！` });
-    s.phase = 'quest';
+    c.events.push({ type: 'announce', text: `✅ 隊伍通過（${approvals} 票贊成），${list(s.team)} 出任務！請到私訊選擇任務結果。` });
+    startQuest(c);
     return;
   }
   s.rejects++;
   c.events.push({ type: 'announce', text: `❌ 隊伍被否決（${approvals} 票贊成），連續否決 ${s.rejects}／${MAX_REJECTS}。` });
+  nextLeader(c);
+}
+
+// 出任務：私訊每位隊員，好人只能出成功
+function startQuest(c: Ctx) {
+  const s = c.s;
+  s.phase = 'quest';
+  s.cards = {};
+  for (const id of s.team) {
+    const evil = isEvil(s.players.find((p) => p.id === id)!.role);
+    c.events.push({
+      type: 'prompt',
+      kind: 'quest',
+      audience: 'user',
+      user: id,
+      text: `⚔️ 任務 ${s.quest + 1}：請選擇任務結果（${QUEST_MS / 1000} 秒，沒選的算成功）`,
+      options: [{ value: 'success', label: '✅ 成功' }, ...(evil ? [{ value: 'fail', label: '❌ 失敗' }] : [])],
+    });
+  }
+  startTimer(c, QUEST_MS);
+}
+
+// 任務結束：只公開失敗票數；7 人以上第 4 個任務要 2 張失敗票才失敗
+function endQuest(c: Ctx) {
+  const s = c.s;
+  const fails = s.team.filter((id) => s.cards[id] === 'fail').length;
+  const needed = s.players.length >= 7 && s.quest === 3 ? 2 : 1;
+  const result = fails >= needed ? 'fail' : 'success';
+  s.results.push(result);
+  c.events.push({
+    type: 'announce',
+    text: `${result === 'success' ? '🎉' : '💥'} 任務 ${s.quest + 1} ${result === 'success' ? '成功' : '失敗'}（${fails} 張失敗票）`,
+  });
+  s.quest++;
   nextLeader(c);
 }
 
@@ -353,8 +390,22 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.players.every((p) => s.votes[p.id])) endTeamVote(c);
       return true;
     }
+    case 'quest': {
+      if (s.phase !== 'quest') return false;
+      if (!s.team.includes(action.user)) return reply(c, action.user, '你不在這次任務的隊伍裡。');
+      if (s.cards[action.user]) return reply(c, action.user, '你已經出過任務了。');
+      if (action.card === 'fail' && !isEvil(s.players.find((p) => p.id === action.user)!.role)) return false;
+      s.cards[action.user] = action.card;
+      reply(c, action.user, action.card === 'success' ? '你出了 ✅ 成功。' : '你出了 ❌ 失敗。');
+      if (s.team.every((id) => s.cards[id])) endQuest(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'quest') {
+        endQuest(c);
+        return true;
+      }
       if (s.phase === 'teamVote') {
         endTeamVote(c);
         return true;
@@ -397,6 +448,7 @@ function createLobby(prev: AState | undefined, host: string, channel: string): R
     rejects: 0,
     team: [],
     votes: {},
+    cards: {},
     speakers: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
