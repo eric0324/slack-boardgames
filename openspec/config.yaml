@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  Slack 桌遊 bot（slack-boardgames）：目前有狼人殺，正在加入誰是臥底。
+  Slack 桌遊 bot GameBuddy（slack-gamebuddy）：目前有狼人殺，正在加入誰是臥底。
   Tech stack: TypeScript, Node.js 22, Slack Bolt (Socket Mode), Vitest。
   架構：純邏輯 game engine（無 I/O）+ Slack adapter。
   開發流程：SDD + TDD（Spec → Test → Code → Refactor）。
