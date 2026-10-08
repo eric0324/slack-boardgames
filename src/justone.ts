@@ -1,6 +1,6 @@
 // 一字千金遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyJustOne(state, action, rng) → { state, events }。
 import { CODENAMES_WORDS } from './codenamesWords.js';
-import { mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_JUSTONE_PLAYERS = 3;
 export const MAX_JUSTONE_PLAYERS = 7;
@@ -28,6 +28,7 @@ export interface JState {
   score: number;
   clues: Record<string, string>;
   removed: string[]; // 這輪被刪掉的提示（回合結束時公開）
+  finished?: boolean; // 牌堆用完正常結束（取消的遊戲沒有）
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -44,9 +45,10 @@ export type JAction =
   | { type: 'guess'; user: string; word: string }
   | { type: 'skipGuess'; user: string }
   | { type: 'skipStep'; user: string }
-  | { type: 'timeout'; id: number };
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<JAction, { type: 'new' }>;
+type GameAction = Exclude<JAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: JState;
@@ -166,9 +168,26 @@ function finishGuess(c: Ctx, result: 'right' | 'skip' | 'wrong') {
   else endGame(c);
 }
 
+// 官方評價
+function rating(score: number) {
+  if (score >= 13) return '完美！';
+  if (score === 12) return '驚人！大家的默契太好了';
+  if (score === 11) return '太厲害了！';
+  if (score >= 9) return '很棒！';
+  if (score >= 7) return '不錯，繼續加油';
+  if (score >= 4) return '還可以，再多練習';
+  return '再試一次吧';
+}
+
 function endGame(c: Ctx) {
-  c.s.phase = 'ended';
-  c.s.timers = {};
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.finished = true;
+  c.events.push(
+    { type: 'announce', text: `🏁 遊戲結束！大家一起猜對 ${s.score} 張，得分 ${s.score} 分：${rating(s.score)}`, gif: 'goodWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -254,6 +273,15 @@ export function applyJustOne(state: JState | undefined, action: JAction, rng: Rn
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.finished) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }
