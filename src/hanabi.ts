@@ -54,6 +54,7 @@ export type HAction =
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'peek'; user: string }
   | { type: 'play'; user: string; index: number }
+  | { type: 'discard'; user: string; index: number }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<HAction, { type: 'new' }>;
@@ -177,6 +178,20 @@ function playCard(c: Ctx, user: string, index: number): boolean {
   return true;
 }
 
+function discardCard(c: Ctx, user: string, index: number): boolean {
+  const s = c.s;
+  if (s.phase !== 'turn' || user !== currentId(s)) return reply(c, user, '還沒輪到你。');
+  if (s.hints >= MAX_HINTS) return reply(c, user, '提示標記滿了（8 個），不能棄牌。');
+  const p = s.players[s.turn];
+  if (!p.hand[index]) return false;
+  const card = takeCard(s, p, index);
+  s.discard.push(card);
+  s.hints++;
+  c.events.push({ type: 'announce', text: `🗑️ ${mention(user)} 棄掉 ${show(card)}，提示標記加 1。` });
+  endTurn(c);
+  return true;
+}
+
 function endTurn(c: Ctx) {
   const s = c.s;
   s.turn = (s.turn + 1) % s.players.length;
@@ -235,6 +250,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       return peek(c, action.user);
     case 'play':
       return playCard(c, action.user, action.index);
+    case 'discard':
+      return discardCard(c, action.user, action.index);
     case 'timeout':
       return false;
   }

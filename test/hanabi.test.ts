@@ -137,3 +137,22 @@ describe('hanabi/turns: 出牌', () => {
     expect(state.hints).toBe(6);
   });
 });
+
+const discard = (user: string, index: number, s: HState) => run([{ type: 'discard', user, index }], s);
+describe('hanabi/turns: 棄牌', () => {
+  it('棄牌：提示標記加 1，公告棄掉的牌，補一張', () => {
+    const s = { ...started(2).state, hints: 5 };
+    const { state, events } = discard('p2', 1, s);
+    expect(state.hints).toBe(6);
+    expect(state.discard).toEqual([{ color: 'red', n: 3 }]);
+    expect(state.players[1].hand).toHaveLength(5);
+    expect(announces(events).join('\n')).toContain('<@p2> 棄掉 🟥3');
+    expect(state.turn).toBe(0);
+  });
+
+  it('提示標記 8 個時不能棄牌', () => {
+    const { state, events } = discard('p2', 0, started(2).state);
+    expect(state.turn).toBe(1);
+    expect(ephemeralTo(events, 'p2')).toMatchObject({ text: expect.stringContaining('提示標記滿了') });
+  });
+});
