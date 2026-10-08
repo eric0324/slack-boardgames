@@ -9,6 +9,7 @@ const SPEECH_MS = 40_000;
 const PICK_MS = 90_000;
 const VOTE_MS = 60_000;
 const QUEST_MS = 60_000;
+const ASSASSIN_MS = 60_000;
 const MAX_REJECTS = 5;
 
 // 人數 → 5 個任務的隊伍人數；7 人以上第 4 個任務要 2 張失敗票
@@ -69,9 +70,11 @@ export type AAction =
   | { type: 'confirmTeam'; user: string }
   | { type: 'teamVote'; user: string; vote: 'approve' | 'reject' }
   | { type: 'quest'; user: string; card: 'success' | 'fail' }
-  | { type: 'timeout'; id: number };
+  | { type: 'assassinate'; user: string; target: string }
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<AAction, { type: 'new' }>;
+type GameAction = Exclude<AAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: AState;
@@ -296,13 +299,52 @@ function startAssassination(c: Ctx) {
     type: 'announce',
     text: `🗡️ 好人完成了 3 個任務！但壞人還有最後機會：壞人是 ${list(evilIds)}，刺客正在和同伴討論要刺殺誰，刺中梅林壞人就逆轉獲勝。`,
   });
+  c.events.push({
+    type: 'prompt',
+    kind: 'assassinate',
+    audience: 'wolves',
+    text: `🗡️ ${mention(roleHolder(s, 'assassin'))} 請選擇要刺殺的人（${ASSASSIN_MS / 1000} 秒），大家可以先在這裡討論誰是梅林`,
+    options: goodIds(s).map((id) => ({ value: id, label: id })),
+  });
+  startTimer(c, ASSASSIN_MS);
 }
 
+const roleHolder = (s: AState, role: ARole) => s.players.find((p) => p.role === role)!.id;
+const goodIds = (s: AState) => s.players.filter((p) => !isEvil(p.role)).map((p) => p.id);
+
+function assassinate(c: Ctx, target: string) {
+  const s = c.s;
+  const assassin = mention(roleHolder(s, 'assassin'));
+  if (target === roleHolder(s, 'merlin')) {
+    c.events.push({ type: 'announce', text: `🎯 刺客 ${assassin} 刺殺了 ${mention(target)}——刺中梅林了！` });
+    endGame(c, 'evil');
+  } else {
+    c.events.push({ type: 'announce', text: `😮 刺客 ${assassin} 刺殺了 ${mention(target)}，但 ${mention(target)} 不是梅林！` });
+    endGame(c, 'good');
+  }
+}
+
+const ROLE_NAME: Record<ARole, string> = {
+  merlin: '梅林',
+  percival: '派西維爾',
+  loyal: '忠臣',
+  assassin: '刺客',
+  morgana: '莫甘娜',
+  minion: '爪牙',
+};
+
+// 結束：公開獲勝陣營、每個人的身分和任務結果
 function endGame(c: Ctx, winner: 'good' | 'evil') {
   const s = c.s;
   s.phase = 'ended';
   s.timers = {};
   s.winner = winner;
+  const title = winner === 'good' ? '🎉 遊戲結束，好人獲勝！' : '😈 遊戲結束，壞人獲勝！';
+  const roster = s.players.map((p) => `${mention(p.id)}：${ROLE_NAME[p.role!]}`).join('\n');
+  c.events.push(
+    { type: 'announce', text: `${title}\n任務結果：${progress(s)}\n${roster}`, gif: winner === 'good' ? 'goodWin' : 'wolvesWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 function nextLeader(c: Ctx) {
@@ -428,8 +470,19 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.team.every((id) => s.cards[id])) endQuest(c);
       return true;
     }
+    case 'assassinate': {
+      if (s.phase !== 'assassinate') return false;
+      if (action.user !== roleHolder(s, 'assassin')) return reply(c, action.user, '只有刺客可以決定要刺殺誰。');
+      if (!goodIds(s).includes(action.target)) return false;
+      assassinate(c, action.target);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'assassinate') {
+        assassinate(c, goodIds(s)[Math.floor(c.rng() * goodIds(s).length)]);
+        return true;
+      }
       if (s.phase === 'quest') {
         endQuest(c);
         return true;
@@ -454,6 +507,15 @@ export function applyAvalon(state: AState | undefined, action: AAction, rng: Rng
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }

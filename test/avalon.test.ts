@@ -374,3 +374,64 @@ describe('avalon/win-condition: 勝負判定', () => {
     expect(announces(events).join('\n')).toContain('<@p4>、<@p5>');
   });
 });
+
+// 5 人局：p1 梅林、p4 刺客
+const assassinating = () => playQuests([false, false, false]);
+const stab = (user: string, target: string, s: AState) => run([{ type: 'assassinate', user, target }], s);
+
+describe('avalon/win-condition: 刺殺梅林', () => {
+  it('刺客在壞人群組收到所有好人的按鈕，60 秒', () => {
+    const { events } = assassinating();
+    const p = prompts(events, 'assassinate').at(-1)!;
+    expect(p.audience).toBe('wolves');
+    expect(p.text).toContain('<@p4>');
+    expect(values(p)).toEqual(['p1', 'p2', 'p3']);
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('刺中梅林：壞人獲勝；刺錯人：好人獲勝', () => {
+    const s = assassinating().state;
+    const hit = stab('p4', 'p1', s);
+    expect(hit.state.winner).toBe('evil');
+    expect(announces(hit.events).join('\n')).toContain('刺中梅林');
+    const miss = stab('p4', 'p3', s);
+    expect(miss.state.winner).toBe('good');
+    expect(announces(miss.events).join('\n')).toContain('不是梅林');
+  });
+
+  it('只有刺客的選擇算數，不能刺壞人', () => {
+    const s = assassinating().state;
+    const denied = stab('p5', 'p1', s);
+    expect(denied.state.phase).toBe('assassinate');
+    expect(ephemeralTo(denied.events, 'p5')).toBeDefined();
+    expect(stab('p4', 'p5', s).state.phase).toBe('assassinate');
+  });
+
+  it('60 秒沒選：隨機刺殺一位好人', () => {
+    const { state, events } = assassinating();
+    const after = run([{ type: 'timeout', id: lastTimer(events).id }], state);
+    expect(after.state.phase).toBe('ended');
+  });
+});
+
+describe('avalon/win-condition: 結束公開與再來一局', () => {
+  it('公告獲勝陣營、每個人的身分和任務結果，貼出再來一局', () => {
+    const { events } = stab('p4', 'p3', assassinating().state);
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('好人獲勝');
+    expect(text).toContain('<@p1>：梅林');
+    expect(text).toContain('<@p5>：莫甘娜');
+    expect(text).toContain('✅✅✅');
+    expect(prompts(events, 'rematch')).toHaveLength(1);
+  });
+
+  it('再來一局：上一局的真人玩家可以開新房間，其他人不行；取消的遊戲不能', () => {
+    const ended = stab('p4', 'p3', assassinating().state).state;
+    const again = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], ended);
+    expect(again.state).toMatchObject({ phase: 'lobby', host: 'p3', players: [{ id: 'p3' }] });
+    expect(again.state.timerSeq).toBe(ended.timerSeq);
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(5).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
