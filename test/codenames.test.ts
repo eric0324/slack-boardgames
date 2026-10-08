@@ -64,3 +64,66 @@ describe('codenames/setup: 機密代號的房間', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', open: false }));
   });
 });
+
+// rng 固定時不洗牌：玩家輪流分到紅、藍隊（p1 紅、p2 藍…），各隊第一位是隊長；藍隊先攻
+// 字卡是詞庫前 25 個，前 9 張藍隊、接著 8 張紅隊、7 張中立、最後 1 張刺客
+const started = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+const boards = (events: GameEvent[]) => events.filter((e) => e.type === 'board') as Extract<GameEvent, { type: 'board' }>[];
+
+describe('codenames/setup: 分隊與隊長', () => {
+  it('5 人：兩隊人數差最多 1，各有 1 位隊長；公告兩隊和先攻', () => {
+    const { state, events } = started(5);
+    const red = state.players.filter((p) => p.team === 'red');
+    const blue = state.players.filter((p) => p.team === 'blue');
+    expect(Math.abs(red.length - blue.length)).toBeLessThanOrEqual(1);
+    expect(red.filter((p) => p.spymaster)).toHaveLength(1);
+    expect(blue.filter((p) => p.spymaster)).toHaveLength(1);
+    const text = announces(events).join('\n');
+    expect(text).toContain('紅隊：隊長 <@p1>');
+    expect(text).toContain('藍隊：隊長 <@p2>');
+    expect(text).toContain('藍隊先攻');
+  });
+
+  it('分隊、隊長、先攻都是隨機的', () => {
+    const a = started(6, () => 0).state;
+    const b = started(6).state;
+    expect(a.startTeam).not.toBe(b.startTeam);
+    expect(a.cards.map((x) => x.word)).not.toEqual(b.cards.map((x) => x.word));
+  });
+});
+
+describe('codenames/setup: 牌桌', () => {
+  it('25 張不重複的字卡：先攻 9、後攻 8、中立 7、刺客 1', () => {
+    const { state } = started(4);
+    expect(new Set(state.cards.map((x) => x.word)).size).toBe(25);
+    const count = (color: string) => state.cards.filter((x) => x.color === color).length;
+    expect([count('blue'), count('red'), count('neutral'), count('assassin')]).toEqual([9, 8, 7, 1]);
+    expect(state.cards.every((x) => !x.revealed)).toBe(true);
+  });
+
+  it('頻道貼出 5×5 的牌桌，按鈕只有詞、不透露顏色', () => {
+    const { state, events } = started(4);
+    const board = boards(events).at(-1)!;
+    expect(board.rows).toHaveLength(5);
+    expect(board.rows.every((r) => r.length === 5)).toBe(true);
+    const flat = board.rows.flat();
+    expect(flat.map((b) => b.label)).toEqual(state.cards.map((x) => x.word));
+    expect(flat.map((b) => b.value)).toEqual(state.cards.map((_, i) => String(i)));
+    expect(flat.every((b) => b.style === undefined)).toBe(true);
+  });
+});
+
+describe('codenames/setup: 隊長的答案', () => {
+  it('兩位隊長收到每張字卡的顏色，隊員沒有', () => {
+    const { state, events } = started(4);
+    for (const id of ['p1', 'p2']) {
+      const text = dmTo(events, id)!.text;
+      expect(text).toContain(`🟦${state.cards[0].word}`);
+      expect(text).toContain(`🟥${state.cards[9].word}`);
+      expect(text).toContain(`⬜${state.cards[17].word}`);
+      expect(text).toContain(`💀${state.cards[24].word}`);
+    }
+    expect(dmTo(events, 'p3')).toBeUndefined();
+    expect(dmTo(events, 'p4')).toBeUndefined();
+  });
+});
