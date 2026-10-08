@@ -7,9 +7,9 @@ REPO=https://github.com/eric0324/slack-werewolve.git
 HOME_DIR=/opt/werewolf
 APP_DIR=$HOME_DIR/app
 
-echo "==> 安裝 Node.js 22 和 git"
+echo "==> 安裝 Node.js 22、git 和編譯工具（better-sqlite3 沒有現成的版本時要現場編譯）"
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs git
+sudo apt-get install -y nodejs git build-essential
 
 echo "==> 加 1GB swap（e2-micro 只有 1GB 記憶體，安裝套件時比較保險）"
 if ! sudo swapon --show | grep -q /swapfile; then
@@ -29,16 +29,16 @@ if [ -d "$APP_DIR/.git" ]; then
 else
   sudo -u werewolf git clone "$REPO" "$APP_DIR"
 fi
-cd "$APP_DIR"
-sudo -u werewolf npm ci
+# /opt/werewolf 的權限是 750，只有 werewolf 帳號能進去，所以要用 werewolf 身分執行
+sudo -u werewolf bash -c "cd '$APP_DIR' && npm ci"
 
 echo "==> 設定 systemd"
-sudo cp deploy/werewolf.service /etc/systemd/system/werewolf.service
+sudo cp "$APP_DIR/deploy/werewolf.service" /etc/systemd/system/werewolf.service
 sudo systemctl daemon-reload
 sudo systemctl enable werewolf
 
-if [ ! -f "$APP_DIR/.env" ]; then
-  sudo -u werewolf cp .env.example .env
+if ! sudo test -f "$APP_DIR/.env"; then
+  sudo -u werewolf cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   sudo chmod 600 "$APP_DIR/.env"
   echo
   echo "安裝完成。接下來："
