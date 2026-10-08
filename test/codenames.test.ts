@@ -127,3 +127,58 @@ describe('codenames/setup: 隊長的答案', () => {
     expect(dmTo(events, 'p4')).toBeUndefined();
   });
 });
+
+const timers = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[];
+const lastTimer = (events: GameEvent[]) => timers(events).at(-1)!;
+const clue = (user: string, word: string, count: number, s: CState) => run([{ type: 'clue', user, word, count }], s);
+
+// 4 人局：紅隊 p1（隊長）、p3；藍隊 p2（隊長）、p4；藍隊先攻
+describe('codenames/turns: 隊長給提示', () => {
+  it('回合開始：公告輪到哪隊和剩餘張數，請隊長給提示，2 分鐘', () => {
+    const { state, events } = started(4);
+    expect(state).toMatchObject({ phase: 'clue', turn: 'blue' });
+    const text = announces(events).at(-1)!;
+    expect(text).toContain('輪到 🟦 藍隊');
+    expect(text).toContain('<@p2>');
+    expect(text).toContain('紅隊剩 8 張');
+    expect(text).toContain('藍隊剩 9 張');
+    expect(lastTimer(events).ms).toBe(120_000);
+  });
+
+  it('隊長給提示：公告提示，進入猜牌，3 分鐘', () => {
+    const { state, events } = clue('p2', '水果', 2, started(4).state);
+    expect(state).toMatchObject({ phase: 'guess', clue: { word: '水果', count: 2 }, guessed: 0 });
+    expect(announces(events)).toContainEqual(expect.stringContaining('🕵️ 藍隊隊長：「水果」2'));
+    expect(lastTimer(events).ms).toBe(180_000);
+  });
+
+  it('不能用牌桌上還沒翻開的詞、數字要 1～9、詞不能有空白', () => {
+    const s = started(4).state;
+    for (const [word, count, hint] of [
+      [s.cards[3].word, 1, '牌桌上的詞'],
+      ['水果', 0, '1～9'],
+      ['水果', 10, '1～9'],
+      ['水 果', 1, '一個詞'],
+    ] as [string, number, string][]) {
+      const res = clue('p2', word, count, s);
+      expect(res.state.phase).toBe('clue');
+      expect(ephemeralTo(res.events, 'p2')).toMatchObject({ text: expect.stringContaining(hint) });
+    }
+  });
+
+  it('不是目前隊伍的隊長不能給提示', () => {
+    const s = started(4).state;
+    for (const user of ['p1', 'p4']) {
+      const res = clue(user, '水果', 1, s);
+      expect(res.state.phase).toBe('clue');
+      expect(ephemeralTo(res.events, user)).toBeDefined();
+    }
+  });
+
+  it('隊長 2 分鐘沒給提示：換對方隊伍', () => {
+    const { state, events } = started(4);
+    const after = run([{ type: 'timeout', id: lastTimer(events).id }], state);
+    expect(after.state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(announces(after.events).join('\n')).toContain('輪到 🟥 紅隊');
+  });
+});

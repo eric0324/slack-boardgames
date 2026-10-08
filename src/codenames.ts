@@ -5,6 +5,8 @@ import { mention, type GameEvent, type Rng } from './engine.js';
 export const MIN_CODENAMES_PLAYERS = 4;
 export const MAX_CODENAMES_PLAYERS = 12;
 const TITLE = '機密代號';
+const CLUE_MS = 120_000;
+const GUESS_MS = 180_000;
 
 export type CPhase = 'lobby' | 'clue' | 'guess' | 'ended';
 
@@ -36,6 +38,8 @@ export interface CState {
   cards: Card[];
   startTeam: Team;
   turn: Team;
+  clue?: { word: string; count: number };
+  guessed: number; // 這回合已經翻了幾張
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -48,6 +52,7 @@ export type CAction =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
+  | { type: 'clue'; user: string; word: string; count: number }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<CAction, { type: 'new' }>;
@@ -148,6 +153,47 @@ function deal(c: Ctx) {
   }
 }
 
+function startTimer(c: Ctx, ms: number) {
+  c.s.timers.phase = ++c.s.timerSeq;
+  c.events.push({ type: 'startTimer', id: c.s.timerSeq, ms });
+}
+
+const captainOf = (s: CState, t: Team) => s.players.find((p) => p.team === t && p.spymaster)!.id;
+
+// 回合開始：請目前隊伍的隊長給提示
+function startTurn(c: Ctx) {
+  const s = c.s;
+  s.phase = 'clue';
+  s.clue = undefined;
+  s.guessed = 0;
+  c.events.push({
+    type: 'announce',
+    text: `🔔 輪到 ${EMOJI[s.turn]} ${TEAM_NAME[s.turn]}：隊長 ${mention(captainOf(s, s.turn))} 請用 \`/game codenames clue <詞> <數字>\` 給提示（${CLUE_MS / 60_000} 分鐘）\n🟥 紅隊剩 ${left(s, 'red')} 張　🟦 藍隊剩 ${left(s, 'blue')} 張`,
+  });
+  startTimer(c, CLUE_MS);
+}
+
+function endTurn(c: Ctx) {
+  c.s.turn = other(c.s.turn);
+  startTurn(c);
+}
+
+function giveClue(c: Ctx, user: string, word: string, count: number): boolean {
+  const s = c.s;
+  if (s.phase !== 'clue' || user !== captainOf(s, s.turn)) return reply(c, user, '現在不是你給提示的時間。');
+  if (!word || /\s/.test(word)) return reply(c, user, '提示只能是一個詞（不能有空白）。');
+  if (s.cards.some((x) => !x.revealed && x.word === word)) return reply(c, user, '不能用牌桌上的詞當提示。');
+  if (!Number.isInteger(count) || count < 1 || count > 9) return reply(c, user, '提示的數字要是 1～9。');
+  s.phase = 'guess';
+  s.clue = { word, count };
+  c.events.push({
+    type: 'announce',
+    text: `🕵️ ${TEAM_NAME[s.turn]}隊長：「${word}」${count}\n${TEAM_NAME[s.turn]}隊員請在牌桌上按字卡猜，最多 ${count + 1} 張（${GUESS_MS / 60_000} 分鐘）`,
+  });
+  startTimer(c, GUESS_MS);
+  return true;
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -186,7 +232,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (n < MIN_CODENAMES_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_CODENAMES_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'clue' }));
       deal(c);
-      s.phase = 'clue';
+      startTurn(c);
       return true;
     }
     case 'cancel': {
@@ -196,8 +242,14 @@ function handle(c: Ctx, action: GameAction): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
-      return false;
+    case 'clue':
+      return giveClue(c, action.user, action.word, action.count);
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'clue') c.events.push({ type: 'announce', text: `⌛ ${TEAM_NAME[s.turn]}隊長沒有給提示，換對方。` });
+      endTurn(c);
+      return true;
+    }
   }
 }
 
@@ -224,6 +276,7 @@ function createLobby(prev: CState | undefined, host: string, channel: string): R
     cards: [],
     startTeam: 'red',
     turn: 'red',
+    guessed: 0,
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
