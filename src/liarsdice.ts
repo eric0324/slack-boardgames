@@ -26,6 +26,7 @@ export interface LState {
   turn: number; // 輪到 players 裡的第幾位
   bid?: { quantity: number; face: number; by: string };
   onesCalled: boolean; // 這輪有人喊過 1 點，1 點就不再萬用
+  winner?: string;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -39,9 +40,11 @@ export type LAction =
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'bid'; user: string; quantity: number; face: number }
-  | { type: 'timeout'; id: number };
+  | { type: 'challenge'; user: string }
+  | { type: 'timeout'; id: number }
+  | { type: 'rematch'; user: string; channel: string };
 
-type GameAction = Exclude<LAction, { type: 'new' }>;
+type GameAction = Exclude<LAction, { type: 'new' } | { type: 'rematch' }>;
 
 interface Result {
   state: LState;
@@ -138,6 +141,46 @@ function placeBid(c: Ctx, user: string, quantity: number, face: number): boolean
   return true;
 }
 
+// 開：公開所有骰子，數喊的點數（1 點萬用，除非這輪喊過 1 點），輸的人少一顆
+function challengeBid(c: Ctx, user: string): boolean {
+  const s = c.s;
+  if (s.phase !== 'bid' || user !== current(s) || !s.bid) return reply(c, user, '現在不能開。');
+  const { quantity, face, by } = s.bid;
+  const wild = !s.onesCalled && face !== 1;
+  const count = s.players.reduce((n, p) => n + p.dice.filter((d) => d === face || (wild && d === 1)).length, 0);
+  const loserId = count >= quantity ? user : by;
+  const reveal = s.players
+    .filter((p) => p.dice.length)
+    .map((p) => `${mention(p.id)}：${p.dice.map((d) => FACES[d - 1]).join(' ')}`)
+    .join('\n');
+  const loserIndex = s.players.findIndex((p) => p.id === loserId);
+  const loser = s.players[loserIndex];
+  loser.dice.pop();
+  c.events.push({
+    type: 'announce',
+    text: `🔍 ${mention(user)} 開「${quantity} 個 ${face}」！\n${reveal}\n${face} 點${wild ? '（含萬用 1 點）' : ''}實際有 ${count} 顆 → ${mention(loserId)} 輸了，少一顆骰子。`,
+  });
+  if (!loser.dice.length) c.events.push({ type: 'announce', text: `💀 ${mention(loserId)} 出局（沒有骰子了）！` });
+  const alive = s.players.filter((p) => p.dice.length);
+  if (alive.length === 1) {
+    endGame(c, alive[0].id);
+    return true;
+  }
+  startRound(c, loser.dice.length ? loserIndex : nextAlive(s, loserIndex));
+  return true;
+}
+
+function endGame(c: Ctx, winner: string) {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  c.events.push(
+    { type: 'announce', text: `🏆 遊戲結束，${mention(winner)} 獲勝！`, gif: 'goodWin' },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -211,10 +254,11 @@ function handle(c: Ctx, action: GameAction): boolean {
     }
     case 'bid':
       return placeBid(c, action.user, action.quantity, action.face);
+    case 'challenge':
+      return challengeBid(c, action.user);
     case 'timeout': {
       if (action.id !== s.timers.phase || s.phase !== 'bid') return false;
-      if (!s.bid) return placeBid(c, current(s), 1, 2);
-      return false;
+      return s.bid ? challengeBid(c, current(s)) : placeBid(c, current(s), 1, 2);
     }
   }
 }
@@ -223,6 +267,15 @@ export function applyLiarsDice(state: LState | undefined, action: LAction, rng: 
   if (action.type === 'new') {
     if (state && state.phase !== 'ended') {
       return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
     return createLobby(state, action.user, action.channel);
   }

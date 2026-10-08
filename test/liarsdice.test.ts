@@ -140,3 +140,83 @@ describe('liarsdice/rounds: 喊數', () => {
     expect(after.state.bid).toEqual({ quantity: 1, face: 2, by: 'p3' });
   });
 });
+
+const challenge = (user: string, s: LState) => run([{ type: 'challenge', user }], s);
+const withDice = (s: LState, dice: number[][], extra: Partial<LState> = {}): LState => ({
+  ...s,
+  players: s.players.map((p, i) => ({ ...p, dice: dice[i] })),
+  ...extra,
+});
+
+describe('liarsdice/rounds: 開', () => {
+  it('喊的人吹牛：公開所有骰子，喊的人少一顆，下一輪由他先喊', () => {
+    // 全場 15 顆都是 6
+    const s = bid('p3', 16, 6, started(3).state).state;
+    const { state, events } = challenge('p1', s);
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p3>：⚅ ⚅ ⚅ ⚅ ⚅');
+    expect(text).toContain('實際有 15 顆');
+    expect(text).toContain('<@p3> 輸了');
+    expect(state.players[2].dice).toHaveLength(4);
+    expect(state).toMatchObject({ round: 2, turn: 2 });
+    expect(state.bid).toBeUndefined();
+  });
+
+  it('喊的數量成立：開的人輸', () => {
+    const s = bid('p3', 15, 6, started(3).state).state;
+    expect(challenge('p1', s).state.players[0].dice).toHaveLength(4);
+  });
+
+  it('1 點萬用；這輪喊過 1 點就不再萬用', () => {
+    const base = started(3).state;
+    const dice = [[1, 1, 2, 3, 4], [5, 5, 5, 5, 5], [6, 6, 6, 6, 6]];
+    const wild = withDice(base, dice, { bid: { quantity: 7, face: 5, by: 'p3' }, turn: 0 });
+    expect(announces(challenge('p1', wild).events).join('\n')).toContain('<@p1> 輸了');
+    const noWild = { ...wild, onesCalled: true };
+    expect(announces(challenge('p1', noWild).events).join('\n')).toContain('<@p3> 輸了');
+  });
+
+  it('只有輪到的人能開，而且要有人喊過', () => {
+    const s = bid('p3', 3, 5, started(3).state).state;
+    expect(ephemeralTo(challenge('p2', s).events, 'p2')).toBeDefined();
+    expect(ephemeralTo(challenge('p3', started(3).state).events, 'p3')).toBeDefined();
+  });
+
+  it('已經有人喊過時超時：自動開', () => {
+    const r = bid('p3', 16, 6, started(3).state);
+    const after = run([{ type: 'timeout', id: lastTimer(r.events).id }], r.state);
+    expect(after.state.players[2].dice).toHaveLength(4);
+  });
+});
+
+describe('liarsdice/rounds: 勝負', () => {
+  const lastOne = () => {
+    const base = started(2).state;
+    return challenge('p1', withDice(base, [[6, 6], [6]], { bid: { quantity: 5, face: 6, by: 'p2' }, turn: 0 }));
+  };
+
+  it('骰子沒了就出局；只剩一人時獲勝，貼出再來一局', () => {
+    const { state, events } = lastOne();
+    expect(state).toMatchObject({ phase: 'ended', winner: 'p1' });
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p2> 出局');
+    expect(text).toContain('<@p1> 獲勝');
+    expect(prompts(events, 'rematch')).toHaveLength(1);
+  });
+
+  it('出局的人之後不會輪到', () => {
+    const base = started(3).state;
+    const { state } = challenge('p2', withDice(base, [[6], [6, 6], [6, 6]], { bid: { quantity: 9, face: 6, by: 'p1' }, turn: 1 }));
+    expect(state.players[0].dice).toHaveLength(0);
+    expect(state.turn).toBe(1);
+  });
+
+  it('再來一局：上一局的真人玩家可以開新房間；取消的遊戲不能', () => {
+    const ended = lastOne().state;
+    const again = run([{ type: 'rematch', user: 'p2', channel: 'C1' }], ended);
+    expect(again.state).toMatchObject({ phase: 'lobby', host: 'p2', players: [{ id: 'p2' }] });
+    expect(ephemeralTo(run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended).events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], started(2).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
