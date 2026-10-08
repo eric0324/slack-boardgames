@@ -165,6 +165,16 @@ const HANABI_HELP = [
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
+// Slack 的 *粗體* 和 `程式碼` 標記外側不能緊貼文字；中文沒有空格，緊貼中文或全形標點時補一個空格
+const SAFE_EDGE = /[\s!-/:-@[-`{-~]/;
+export function slackText(text: string): string {
+  return text.replace(/`[^`\n]+`|\*[^*\n]+\*/g, (m: string, offset: number, all: string) => {
+    const before = all[offset - 1];
+    const after = all[offset + m.length];
+    return `${before && !SAFE_EDGE.test(before) ? ' ' : ''}${m}${after && !SAFE_EDGE.test(after) ? ' ' : ''}`;
+  });
+}
+
 // 遊戲大廳：每款遊戲一列，附「開房」按鈕
 const CATALOG: { kind: Kind; emoji: string; name: string; players: string; desc: string }[] = [
   { kind: 'werewolf', emoji: '🐺', name: '狼人殺', players: '6～12 人', desc: '陣營推理，夜晚私訊行動、白天輪流發言投票' },
@@ -180,13 +190,13 @@ const CATALOG: { kind: Kind; emoji: string; name: string; players: string; desc:
 
 function lobbyBlocks(channel: string) {
   return [
-    { type: 'section', text: { type: 'mrkdwn', text: '*🎮 遊戲大廳*：點「開房」就能開一局，你會是房主' } },
+    { type: 'section', text: { type: 'mrkdwn', text: slackText('*🎮 遊戲大廳*：點「開房」就能開一局，你會是房主') } },
     ...CATALOG.map((g, i) => ({
       type: 'section',
-      text: { type: 'mrkdwn', text: `${g.emoji} *${g.name}*（\`${g.kind}\`）${g.players}\n${g.desc}` },
+      text: { type: 'mrkdwn', text: slackText(`${g.emoji} *${g.name}*（\`${g.kind}\`）${g.players}\n${g.desc}`) },
       accessory: button('lobbyOpen', i, '開房', channel, g.kind),
     })),
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `看指令：\`/game <代號> help\`｜📖 <${WIKI}|wiki>` }] },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: slackText(`看指令：\`/game <代號> help\`｜📖 <${WIKI}|wiki>`) }] },
   ];
 }
 
@@ -572,7 +582,7 @@ export class GameHost {
   // `/game`：只讓輸入的人看到遊戲大廳
   private showLobby(channel: string, user: string): Promise<void> {
     this.queue = this.queue
-      .then(() => this.client.chat.postEphemeral({ channel, user, text: GAME_LIST, blocks: lobbyBlocks(channel) }))
+      .then(() => this.client.chat.postEphemeral({ channel, user, text: slackText(GAME_LIST), blocks: lobbyBlocks(channel) }))
       .catch((err) => console.error('[werewolf] Slack API error', err));
     return this.queue;
   }
@@ -684,7 +694,8 @@ export class GameHost {
       .join(' ');
   }
 
-  private async send(channel: string, e: GameEvent, kind: Kind) {
+  private async send(channel: string, event: GameEvent, kind: Kind) {
+    const e = 'text' in event && typeof event.text === 'string' ? ({ ...event, text: slackText(event.text) } as GameEvent) : event;
     const chat = this.client.chat;
     switch (e.type) {
       case 'gameRecord':

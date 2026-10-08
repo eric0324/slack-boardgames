@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseHanabiCommand, parseJustOneCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, slackText, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseHanabiCommand, parseJustOneCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -1013,5 +1013,26 @@ describe('game-lobby: 房間公告附上遊戲說明', () => {
     const { host, calls } = setup();
     await host.command('C1', 'U1', 'alice', 'new');
     expect(lobbyPost(calls).text).toContain(rulesLink('狼人殺'));
+  });
+});
+
+describe('game-commands: 訊息格式正確顯示', () => {
+  it('標記外側緊貼中文或全形標點時補空格；已經有空白或半形標點時不變', () => {
+    expect(slackText('📍 *間諜危機*（`spyfall`）4～10 人')).toBe('📍 *間諜危機* （ `spyfall` ）4～10 人');
+    expect(slackText('請用 `/game justone clue <詞>` 給提示')).toBe('請用 `/game justone clue <詞>` 給提示');
+    expect(slackText('輸入`/game`開房')).toBe('輸入 `/game` 開房');
+    expect(slackText('*狼人殺指令*\n• `/werewolf new`：開房')).toBe('*狼人殺指令*\n• `/werewolf new` ：開房');
+    expect(slackText('(`a`) and *b*.')).toBe('(`a`) and *b*.');
+  });
+
+  it('送出的公告、只讓自己看到的訊息和大廳都套用', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    expect(JSON.stringify(calls.at(-1)!.args.blocks)).toContain('*間諜危機* （ `spyfall` ）');
+    await host.game('C1', 'U1', 'alice', 'liarsdice new');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    const turn = calls.find((c) => String(c.args.text).includes('喊數'))!;
+    expect(turn.args.text).toContain('喊數： `/game liarsdice bid <數量> <點數>` （');
   });
 });
