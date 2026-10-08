@@ -996,3 +996,22 @@ describe('game-commands: 遊戲大廳', () => {
     expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
   });
 });
+
+describe('game-lobby: 房間公告附上遊戲說明', () => {
+  const lobbyPost = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postMessage' || c.method === 'chat.update').at(-1)!.args;
+  const rulesLink = (name: string) => `https://github.com/eric0324/slack-gamebuddy/wiki/${encodeURI(`${name}-遊戲規則`)}`;
+
+  it('開房時附上該遊戲的規則頁連結，有人加入後仍保留', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'liarsdice new');
+    expect(lobbyPost(calls).text).toContain(rulesLink('吹牛骰'));
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(lobbyPost(calls).text).toContain(rulesLink('吹牛骰'));
+  });
+
+  it('狼人殺的房間也有', async () => {
+    const { host, calls } = setup();
+    await host.command('C1', 'U1', 'alice', 'new');
+    expect(lobbyPost(calls).text).toContain(rulesLink('狼人殺'));
+  });
+});
