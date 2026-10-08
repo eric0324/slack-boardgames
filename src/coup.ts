@@ -5,8 +5,11 @@ import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 export const MIN_COUP_PLAYERS = 3;
 export const MAX_COUP_PLAYERS = 6;
 const TITLE = '政變';
+const ACTION_MS = 60_000;
+const TARGET_MS = 30_000;
 
-export type KPhase = 'lobby' | 'action' | 'ended';
+export type KPhase = 'lobby' | 'action' | 'target' | 'lose' | 'ended';
+export type ActKind = 'income' | 'foreignAid' | 'coup' | 'tax' | 'assassinate' | 'steal' | 'exchange';
 
 export type Role = 'duke' | 'assassin' | 'captain' | 'ambassador' | 'contessa';
 const ROLES: Role[] = ['duke', 'assassin', 'captain', 'ambassador', 'contessa'];
@@ -38,6 +41,8 @@ export interface KState {
   players: KPlayer[];
   deck: Role[];
   turn: number;
+  pending?: { actor: string; kind: ActKind; target?: string };
+  losing: string[]; // 等著選要翻開哪張牌的玩家
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -50,6 +55,8 @@ export type KAction =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
+  | { type: 'act'; user: string; kind: ActKind }
+  | { type: 'target'; user: string; target: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<KAction, { type: 'new' }>;
@@ -100,6 +107,119 @@ function deal(c: Ctx) {
     gif: 'start',
   });
   for (const p of s.players) c.events.push({ type: 'dm', to: p.id, text: `🃏 你的手牌：${cardList(p)}\n\n${ROLE_HELP}` });
+}
+
+function startTimer(c: Ctx, ms: number) {
+  c.s.timers.phase = ++c.s.timerSeq;
+  c.events.push({ type: 'startTimer', id: c.s.timerSeq, ms });
+}
+
+const ACT_LABEL: Record<ActKind, string> = {
+  income: '💰 收入 +1',
+  foreignAid: '🤲 外援 +2',
+  coup: '💥 政變（付 7）',
+  tax: '👑 稅收 +3（公爵）',
+  assassinate: '🗡️ 刺殺（付 3，刺客）',
+  steal: '🏴‍☠️ 勒索 2 枚（隊長）',
+  exchange: '🔄 交換（大使）',
+};
+const TARGETED: ActKind[] = ['coup', 'assassinate', 'steal'];
+
+const alive = (p: KPlayer) => p.cards.some((x) => !x.revealed);
+const current = (s: KState) => s.players[s.turn];
+const playerOf = (s: KState, id: string) => s.players.find((p) => p.id === id)!;
+
+function available(p: KPlayer): ActKind[] {
+  if (p.coins >= 10) return ['coup'];
+  return (['income', 'foreignAid', 'coup', 'tax', 'assassinate', 'steal', 'exchange'] as ActKind[]).filter(
+    (k) => (k !== 'coup' || p.coins >= 7) && (k !== 'assassinate' || p.coins >= 3),
+  );
+}
+
+// 輪到下一位：公告金幣和翻開的牌，給行動按鈕
+function startTurn(c: Ctx) {
+  const s = c.s;
+  s.phase = 'action';
+  s.pending = undefined;
+  const p = current(s);
+  const status = s.players
+    .map((x) => {
+      const shown = x.cards.filter((k) => k.revealed).map((k) => ROLE_NAME[k.role]);
+      return `${mention(x.id)} 💰${x.coins}${shown.length ? `（翻開：${shown.join('、')}）` : ''}${alive(x) ? '' : ' 💀'}`;
+    })
+    .join('\n');
+  c.events.push(
+    { type: 'announce', text: `👉 輪到 ${mention(p.id)}\n${status}` },
+    {
+      type: 'prompt',
+      kind: 'coupAction',
+      audience: 'channel',
+      text: `${mention(p.id)} 請選擇行動（${ACTION_MS / 1000} 秒）`,
+      options: available(p).map((k) => ({ value: k, label: ACT_LABEL[k] })),
+    },
+  );
+  startTimer(c, ACTION_MS);
+}
+
+function nextTurn(c: Ctx) {
+  const s = c.s;
+  for (let i = 1; i <= s.players.length; i++) {
+    const k = (s.turn + i) % s.players.length;
+    if (alive(s.players[k])) {
+      s.turn = k;
+      break;
+    }
+  }
+  startTurn(c);
+}
+
+function declare(c: Ctx, user: string, kind: ActKind): boolean {
+  const s = c.s;
+  const p = current(s);
+  if (s.phase !== 'action' || user !== p.id) return reply(c, user, '還沒輪到你行動。');
+  if (!available(p).includes(kind)) return reply(c, user, p.coins >= 10 ? '有 10 枚以上金幣時只能政變。' : '金幣不夠，不能選這個行動。');
+  if (kind === 'income') {
+    p.coins += 1;
+    c.events.push({ type: 'announce', text: `💰 ${mention(p.id)} 收入，拿 1 枚金幣。` });
+    nextTurn(c);
+    return true;
+  }
+  if (TARGETED.includes(kind)) {
+    s.phase = 'target';
+    s.pending = { actor: p.id, kind };
+    c.events.push({
+      type: 'prompt',
+      kind: 'coupTarget',
+      audience: 'channel',
+      text: `${mention(p.id)} 選擇${ACT_LABEL[kind]}的目標（${TARGET_MS / 1000} 秒）`,
+      options: s.players.filter((x) => x.id !== p.id && alive(x)).map((x) => ({ value: x.id, label: x.id })),
+    });
+    startTimer(c, TARGET_MS);
+    return true;
+  }
+  return false;
+}
+
+function chooseTarget(c: Ctx, user: string, targetId: string): boolean {
+  const s = c.s;
+  if (s.phase !== 'target' || user !== s.pending!.actor) return reply(c, user, '現在不是你選目標。');
+  const t = s.players.find((x) => x.id === targetId);
+  if (!t || t.id === user || !alive(t)) return false;
+  s.pending!.target = t.id;
+  const actor = playerOf(s, user);
+  if (s.pending!.kind === 'coup') {
+    actor.coins -= 7;
+    c.events.push({ type: 'announce', text: `💥 ${mention(user)} 付 7 枚金幣，對 ${mention(t.id)} 發動政變！` });
+    loseInfluence(c, [t.id]);
+  }
+  return true;
+}
+
+// 失去影響力：依序讓玩家選要翻開哪張牌
+function loseInfluence(c: Ctx, ids: string[]) {
+  const s = c.s;
+  s.phase = 'lose';
+  s.losing = ids;
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -162,7 +282,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (n < MIN_COUP_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_COUP_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'action' }));
       deal(c);
-      s.phase = 'action';
+      startTurn(c);
       return true;
     }
     case 'cancel': {
@@ -172,8 +292,21 @@ function handle(c: Ctx, action: GameAction): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
+    case 'act':
+      return declare(c, action.user, action.kind);
+    case 'target':
+      return chooseTarget(c, action.user, action.target);
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      const others = () => s.players.filter((x) => x.id !== current(s).id && alive(x));
+      if (s.phase === 'action') {
+        if (current(s).coins < 10) return declare(c, current(s).id, 'income');
+        declare(c, current(s).id, 'coup');
+        return chooseTarget(c, current(s).id, others()[Math.floor(c.rng() * others().length)].id);
+      }
+      if (s.phase === 'target') return chooseTarget(c, s.pending!.actor, others()[Math.floor(c.rng() * others().length)].id);
       return false;
+    }
   }
 }
 
@@ -199,6 +332,7 @@ function createLobby(prev: KState | undefined, host: string, channel: string): R
     players: [{ id: host, cards: [], coins: 0 }],
     deck: [],
     turn: 0,
+    losing: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };

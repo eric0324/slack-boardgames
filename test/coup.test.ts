@@ -97,3 +97,62 @@ describe('coup/setup: 發牌與金幣', () => {
     expect(started(3, () => 0).state.turn).toBe(0);
   });
 });
+
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const lastTimer = (events: GameEvent[]) => (events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[]).at(-1)!;
+const values = (p: { options: { value: string }[] }) => p.options.map((o) => o.value);
+const act = (user: string, kind: string, s: KState) => run([{ type: 'act', user, kind } as KAction], s);
+const target = (user: string, t: string, s: KState) => run([{ type: 'target', user, target: t }], s);
+const coins = (s: KState, list: number[]): KState => ({ ...s, players: s.players.map((p, i) => ({ ...p, coins: list[i] })) });
+
+// 3 人局：p3 先；p1 公爵公爵、p2 公爵刺客、p3 刺客刺客
+describe('coup/turns: 行動', () => {
+  it('輪到的人收到行動按鈕，金幣不夠的行動不能選；60 秒', () => {
+    const { events } = started(3);
+    const p = prompts(events, 'coupAction').at(-1)!;
+    expect(p.text).toContain('<@p3>');
+    expect(values(p)).toEqual(['income', 'foreignAid', 'tax', 'steal', 'exchange']);
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('收入：拿 1 枚，輪到下一位', () => {
+    const { state, events } = act('p3', 'income', started(3).state);
+    expect(state.players[2].coins).toBe(3);
+    expect(state.turn).toBe(0);
+    expect(announces(events).join('\n')).toContain('<@p3> 收入');
+  });
+
+  it('只有輪到的人能行動', () => {
+    const res = act('p1', 'income', started(3).state);
+    expect(res.state.players[0].coins).toBe(2);
+    expect(ephemeralTo(res.events, 'p1')).toBeDefined();
+  });
+
+  it('政變：選目標後付 7 枚，目標失去一個影響力', () => {
+    const s = coins(started(3).state, [2, 2, 7]);
+    const picking = act('p3', 'coup', s);
+    expect(picking.state.phase).toBe('target');
+    expect(values(prompts(picking.events, 'coupTarget').at(-1)!)).toEqual(['p1', 'p2']);
+    const { state } = target('p3', 'p1', picking.state);
+    expect(state.players[2].coins).toBe(0);
+    expect(state).toMatchObject({ phase: 'lose', losing: ['p1'] });
+  });
+
+  it('10 枚以上只能政變', () => {
+    const s = coins(started(3).state, [2, 2, 10]);
+    const { events } = act('p3', 'income', { ...s, phase: 'action' });
+    expect(ephemeralTo(events, 'p3')).toMatchObject({ text: expect.stringContaining('政變') });
+    const next = act('p3', 'income', coins(started(3).state, [10, 2, 2]));
+    expect(values(prompts(next.events, 'coupAction').at(-1)!)).toEqual(['coup']);
+  });
+
+  it('選行動超時：收入；10 枚以上時對隨機一人政變；選目標超時隨機', () => {
+    const st = started(3);
+    expect(run([{ type: 'timeout', id: lastTimer(st.events).id }], st.state).state.players[2].coins).toBe(3);
+    const rich = coins(st.state, [2, 2, 10]);
+    expect(run([{ type: 'timeout', id: lastTimer(st.events).id }], rich).state.phase).toBe('lose');
+    const picking = act('p3', 'coup', coins(st.state, [2, 2, 7]));
+    expect(run([{ type: 'timeout', id: lastTimer(picking.events).id }], picking.state).state.phase).toBe('lose');
+  });
+});
