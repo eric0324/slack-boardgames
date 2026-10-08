@@ -61,3 +61,29 @@ describe('liarsdice/setup: 吹牛骰的房間', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', open: false }));
   });
 });
+
+const FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+// rng 固定為 0.99999：擲出來全是 6，第一位是最後一位玩家
+const started = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+
+describe('liarsdice/setup: 骰子', () => {
+  it('每人 5 顆骰子，私訊自己的點數', () => {
+    const { state, events } = started(3);
+    for (const p of state.players) {
+      expect(p.dice).toHaveLength(5);
+      expect(p.dice.every((d) => d >= 1 && d <= 6)).toBe(true);
+      expect(dmTo(events, p.id)!.text).toContain(p.dice.map((d) => FACES[d - 1]).join(' '));
+    }
+  });
+
+  it('頻道只公告每人剩幾顆和全場總數，不洩漏點數', () => {
+    const text = announces(started(3).events).join('\n');
+    expect(text).toContain('<@p1> 5 顆');
+    expect(text).toContain('全場 15 顆');
+    for (const f of FACES) expect(text).not.toContain(f);
+  });
+
+  it('擲骰是隨機的', () => {
+    expect(started(2, () => 0).state.players[0].dice).not.toEqual(started(2).state.players[0].dice);
+  });
+});

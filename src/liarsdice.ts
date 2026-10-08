@@ -1,15 +1,18 @@
 // 吹牛骰遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyLiarsDice(state, action, rng) → { state, events }。
 import { randomBotName } from './botLines.js';
-import { isBot, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_DICE_PLAYERS = 2;
 export const MAX_DICE_PLAYERS = 8;
 const TITLE = '吹牛骰';
+const START_DICE = 5;
+const FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
 export type LPhase = 'lobby' | 'bid' | 'ended';
 
 export interface LPlayer {
   id: string;
+  dice: number[];
 }
 
 export interface LState {
@@ -18,6 +21,8 @@ export interface LState {
   host: string;
   phase: LPhase;
   players: LPlayer[];
+  round: number;
+  turn: number; // 輪到 players 裡的第幾位
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -53,6 +58,24 @@ const lobbyEvent = (s: LState): GameEvent => ({
   open: s.phase === 'lobby',
 });
 
+const totalDice = (s: LState) => s.players.reduce((n, p) => n + p.dice.length, 0);
+
+// 新的一輪：還有骰子的人重新擲骰並私訊點數，頻道只公告每人剩幾顆
+function startRound(c: Ctx, starter: number) {
+  const s = c.s;
+  s.round++;
+  s.turn = starter;
+  for (const p of s.players) p.dice = p.dice.map(() => Math.floor(c.rng() * 6) + 1);
+  const alive = s.players.filter((p) => p.dice.length);
+  c.events.push({
+    type: 'announce',
+    text: `🎲 第 ${s.round} 輪：${alive.map((p) => `${mention(p.id)} ${p.dice.length} 顆`).join('、')}（全場 ${totalDice(s)} 顆）`,
+  });
+  for (const p of alive) {
+    c.events.push({ type: 'dm', to: p.id, text: `🎲 第 ${s.round} 輪，你的骰子：${p.dice.map((d) => FACES[d - 1]).join(' ')}` });
+  }
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -65,7 +88,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
       if (s.players.some((p) => p.id === action.user)) return reply(c, action.user, '你已經在房間裡了。');
       if (s.players.length >= MAX_DICE_PLAYERS) return reply(c, action.user, '房間已滿。');
-      s.players.push({ id: action.user });
+      s.players.push({ id: action.user, dice: [] });
       c.events.push(lobbyEvent(s));
       return true;
     }
@@ -90,7 +113,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       for (let i = 1; i <= Math.min(action.count, room); i++) {
         const name = randomBotName(c.rng, taken);
         taken.add(name);
-        s.players.push({ id: `bot:${bots + i}:${name}` });
+        s.players.push({ id: `bot:${bots + i}:${name}`, dice: [] });
       }
       if (room > 0) c.events.push(lobbyEvent(s));
       if (action.count > room) reply(c, action.user, '房間已滿。');
@@ -113,6 +136,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (n < MIN_DICE_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_DICE_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'bid' }));
       s.phase = 'bid';
+      for (const p of s.players) p.dice = Array(START_DICE).fill(0);
+      startRound(c, Math.floor(c.rng() * n));
       return true;
     }
     case 'cancel': {
@@ -146,7 +171,9 @@ function createLobby(prev: LState | undefined, host: string, channel: string): R
     channel,
     host,
     phase: 'lobby',
-    players: [{ id: host }],
+    players: [{ id: host, dice: [] }],
+    round: 0,
+    turn: 0,
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
