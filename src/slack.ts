@@ -4,10 +4,21 @@ import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
 import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applyCodenames, type CAction, type CState } from './codenames.js';
+import { applyLiarsDice, type LAction, type LState } from './liarsdice.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice';
+type OtherKind = Exclude<Kind, 'werewolf'>;
+
+// 狼人殺以外的遊戲都用同一套方式接上 adapter：engine、指令解析、按鈕對應、說明
+interface GameDef {
+  states: Map<string, { phase: string }>;
+  apply(state: any, action: any, rng: Rng): { state: any; events: GameEvent[] };
+  parse(text: string, user: string, channel: string): { type: string } | null;
+  button(kind: string, value: string, user: string, channel: string): { type: string } | null;
+  help: string;
+}
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -50,7 +61,8 @@ const GAME_LIST = [
   '• 📍 *間諜危機*（`spyfall`）：4～10 人，開房 `/game spyfall new`',
   '• 🏰 *阿瓦隆*（`avalon`）：5～10 人，開房 `/game avalon new`',
   '• 🟥 *機密代號*（`codenames`）：4～12 人（不支援 bot），開房 `/game codenames new`',
-  '各遊戲的指令：`/game werewolf help`、`/game undercover help`、`/game spyfall help`、`/game avalon help`、`/game codenames help`',
+  '• 🎲 *吹牛骰*（`liarsdice`）：2～8 人，開房 `/game liarsdice new`',
+  '各遊戲的指令：`/game <遊戲代號> help`，例如 `/game liarsdice help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -100,6 +112,18 @@ const CODENAMES_HELP = [
   '• `/game codenames next`：直接結束目前隊伍的回合（房主）',
   '• `/game codenames cancel`：取消遊戲（房主）',
   '翻牌、結束猜牌都用按鈕',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const LIARSDICE_HELP = [
+  '*吹牛骰指令*',
+  '• `/game liarsdice new`：開房（任何人）',
+  '• `/game liarsdice addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game liarsdice removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game liarsdice start`：開始遊戲，需要 2～8 人（房主）',
+  '• `/game liarsdice bid <數量> <點數>`：喊「全場至少有 N 個 X 點」（輪到你時）',
+  '• `/game liarsdice cancel`：取消遊戲（房主）',
+  '覺得上一個喊數是吹牛就按「開！」；1 點是萬用，這一輪有人喊過 1 點就不再萬用',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -175,6 +199,21 @@ export function parseCodenamesCommand(text: string, user: string, channel: strin
   const action = parseUndercoverCommand(text, user, channel);
   if (!action || action.type === 'guess' || action.type === 'endDiscussion' || action.type === 'skipSpeaker') return null;
   return action as CAction;
+}
+
+// 吹牛骰的子指令：bid <數量> <點數>
+export function parseLiarsDiceCommand(text: string, user: string, channel: string): LAction | null {
+  const [sub, ...rest] = text.trim().split(/\s+/);
+  if (sub === 'bid') return rest.length === 2 ? { type: 'bid', user, quantity: Number(rest[0]), face: Number(rest[1]) } : null;
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || !['new', 'start', 'cancel', 'addBot', 'removeBot'].includes(action.type)) return null;
+  return action as LAction;
+}
+
+function liarsDiceButton(kind: string, _value: string, user: string, channel: string): LAction | null {
+  if (kind === 'join' || kind === 'leave' || kind === 'start' || kind === 'challenge') return { type: kind, user };
+  if (kind === 'rematch') return { type: 'rematch', user, channel };
+  return null;
 }
 
 function codenamesButton(kind: string, value: string, user: string, channel: string): CAction | null {
@@ -300,6 +339,7 @@ export class GameHost {
   spyfallGames = new Map<string, SState>();
   avalonGames = new Map<string, AState>();
   codenamesGames = new Map<string, CState>();
+  liarsDiceGames = new Map<string, LState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private boardTs = new Map<string, string>(); // 機密代號的牌桌訊息
@@ -311,6 +351,7 @@ export class GameHost {
   private gifs: Partial<Record<GifKey, string[]>>;
   private stats?: StatsStore;
   private setTimer: (fn: () => void, ms: number) => void;
+  private defs: Record<OtherKind, GameDef>;
 
   constructor(
     private client: SlackClient,
@@ -320,6 +361,17 @@ export class GameHost {
     this.gifs = opts.gifs ?? GIFS;
     this.stats = opts.stats;
     this.setTimer = opts.setTimer ?? ((fn, ms) => void setTimeout(fn, ms));
+    this.defs = {
+      undercover: { states: this.undercoverGames, apply: applyUndercover, parse: parseUndercoverCommand, button: undercoverButton, help: UNDERCOVER_HELP },
+      spyfall: { states: this.spyfallGames, apply: applySpyfall, parse: parseSpyfallCommand, button: spyfallButton, help: SPYFALL_HELP },
+      avalon: { states: this.avalonGames, apply: applyAvalon, parse: parseAvalonCommand, button: avalonButton, help: AVALON_HELP },
+      codenames: { states: this.codenamesGames, apply: applyCodenames, parse: parseCodenamesCommand, button: codenamesButton, help: CODENAMES_HELP },
+      liarsdice: { states: this.liarsDiceGames, apply: applyLiarsDice, parse: parseLiarsDiceCommand, button: liarsDiceButton, help: LIARSDICE_HELP },
+    };
+  }
+
+  private isOther(kind: string | undefined): kind is OtherKind {
+    return kind !== undefined && kind in this.defs;
   }
 
   // 等目前排隊中的訊息都送完（測試用）
@@ -331,14 +383,10 @@ export class GameHost {
   private active(channel: string): Kind | null {
     const w = this.games.get(channel);
     if (w && w.phase !== 'ended') return 'werewolf';
-    const u = this.undercoverGames.get(channel);
-    if (u && u.phase !== 'ended') return 'undercover';
-    const sp = this.spyfallGames.get(channel);
-    if (sp && sp.phase !== 'ended') return 'spyfall';
-    const av = this.avalonGames.get(channel);
-    if (av && av.phase !== 'ended') return 'avalon';
-    const cn = this.codenamesGames.get(channel);
-    if (cn && cn.phase !== 'ended') return 'codenames';
+    for (const [kind, def] of Object.entries(this.defs) as [OtherKind, GameDef][]) {
+      const st = def.states.get(channel);
+      if (st && st.phase !== 'ended') return kind;
+    }
     return null;
   }
 
@@ -358,10 +406,7 @@ export class GameHost {
     const [g, ...rest] = text.trim().split(/\s+/);
     const restText = rest.join(' ');
     if (g === 'werewolf') return this.command(channel, user, userName, restText);
-    if (g === 'undercover') return this.undercover(channel, user, restText);
-    if (g === 'spyfall') return this.spyfall(channel, user, restText);
-    if (g === 'avalon') return this.avalon(channel, user, restText);
-    if (g === 'codenames') return this.codenames(channel, user, restText);
+    if (this.isOther(g)) return this.play(g, channel, user, restText);
     if (g === 'stats') return this.showStats(channel, user, restText);
     return this.reply(channel, user, GAME_LIST);
   }
@@ -377,36 +422,27 @@ export class GameHost {
     return this.dispatch(channel, action);
   }
 
-  // `/game undercover <子指令>`
-  private undercover(channel: string, user: string, text: string): Promise<void> {
-    const action = parseUndercoverCommand(text, user, channel);
-    if (!action) return this.reply(channel, user, UNDERCOVER_HELP);
-    if (this.blocked(channel, 'undercover')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
-    return this.dispatchUndercover(channel, action);
+
+
+
+
+  // `/game <遊戲> <子指令>`（狼人殺以外的遊戲）
+  private play(kind: OtherKind, channel: string, user: string, text: string): Promise<void> {
+    const def = this.defs[kind];
+    const action = def.parse(text, user, channel);
+    if (!action) return this.reply(channel, user, def.help);
+    if (this.blocked(channel, kind)) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    return this.dispatchGame(kind, channel, action);
   }
 
-  // `/game spyfall <子指令>`
-  private spyfall(channel: string, user: string, text: string): Promise<void> {
-    const action = parseSpyfallCommand(text, user, channel);
-    if (!action) return this.reply(channel, user, SPYFALL_HELP);
-    if (this.blocked(channel, 'spyfall')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
-    return this.dispatchSpyfall(channel, action);
-  }
-
-  // `/game avalon <子指令>`
-  private avalon(channel: string, user: string, text: string): Promise<void> {
-    const action = parseAvalonCommand(text, user, channel);
-    if (!action) return this.reply(channel, user, AVALON_HELP);
-    if (this.blocked(channel, 'avalon')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
-    return this.dispatchAvalon(channel, action);
-  }
-
-  // `/game codenames <子指令>`
-  private codenames(channel: string, user: string, text: string): Promise<void> {
-    const action = parseCodenamesCommand(text, user, channel);
-    if (!action) return this.reply(channel, user, CODENAMES_HELP);
-    if (this.blocked(channel, 'codenames')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
-    return this.dispatchCodenames(channel, action);
+  dispatchGame(kind: OtherKind, channel: string, action: { type: string }): Promise<void> {
+    const def = this.defs[kind];
+    const { state, events } = def.apply(def.states.get(channel), action, this.rng);
+    if (state) {
+      def.states.set(channel, state);
+      this.lastKind.set(channel, kind);
+    }
+    return this.deliver(channel, events, kind);
   }
 
   button(actionId: string, value: string, user: string, userName: string): Promise<void> {
@@ -414,21 +450,10 @@ export class GameHost {
     const kind = actionId.split(':')[1];
     const sep = value.indexOf('|');
     const channel = value.slice(0, sep);
-    if (this.lastKind.get(channel) === 'undercover') {
-      const u = undercoverButton(kind, value.slice(sep + 1), user, channel);
-      return u ? this.dispatchUndercover(channel, u) : Promise.resolve();
-    }
-    if (this.lastKind.get(channel) === 'spyfall') {
-      const sp = spyfallButton(kind, value.slice(sep + 1), user, channel);
-      return sp ? this.dispatchSpyfall(channel, sp) : Promise.resolve();
-    }
-    if (this.lastKind.get(channel) === 'avalon') {
-      const av = avalonButton(kind, value.slice(sep + 1), user, channel);
-      return av ? this.dispatchAvalon(channel, av) : Promise.resolve();
-    }
-    if (this.lastKind.get(channel) === 'codenames') {
-      const cn = codenamesButton(kind, value.slice(sep + 1), user, channel);
-      return cn ? this.dispatchCodenames(channel, cn) : Promise.resolve();
+    const last = this.lastKind.get(channel);
+    if (this.isOther(last)) {
+      const action = this.defs[last].button(kind, value.slice(sep + 1), user, channel);
+      return action ? this.dispatchGame(last, channel, action) : Promise.resolve();
     }
     const action = buttonAction(kind, value.slice(sep + 1), user, channel);
     return action ? this.dispatch(channel, action) : Promise.resolve();
@@ -458,41 +483,9 @@ export class GameHost {
     return this.deliver(channel, events);
   }
 
-  dispatchUndercover(channel: string, action: UAction): Promise<void> {
-    const { state, events } = applyUndercover(this.undercoverGames.get(channel), action, this.rng);
-    if (state) {
-      this.undercoverGames.set(channel, state);
-      this.lastKind.set(channel, 'undercover');
-    }
-    return this.deliver(channel, events, 'undercover');
-  }
 
-  dispatchSpyfall(channel: string, action: SAction): Promise<void> {
-    const { state, events } = applySpyfall(this.spyfallGames.get(channel), action, this.rng);
-    if (state) {
-      this.spyfallGames.set(channel, state);
-      this.lastKind.set(channel, 'spyfall');
-    }
-    return this.deliver(channel, events, 'spyfall');
-  }
 
-  dispatchAvalon(channel: string, action: AAction): Promise<void> {
-    const { state, events } = applyAvalon(this.avalonGames.get(channel), action, this.rng);
-    if (state) {
-      this.avalonGames.set(channel, state);
-      this.lastKind.set(channel, 'avalon');
-    }
-    return this.deliver(channel, events, 'avalon');
-  }
 
-  dispatchCodenames(channel: string, action: CAction): Promise<void> {
-    const { state, events } = applyCodenames(this.codenamesGames.get(channel), action, this.rng);
-    if (state) {
-      this.codenamesGames.set(channel, state);
-      this.lastKind.set(channel, 'codenames');
-    }
-    return this.deliver(channel, events, 'codenames');
-  }
 
   // 依序送出，避免同一局的訊息順序錯亂
   private deliver(channel: string, events: GameEvent[], kind: Kind = 'werewolf'): Promise<void> {
@@ -544,10 +537,7 @@ export class GameHost {
       case 'startTimer':
         this.setTimer(() => {
           const timeout = { type: 'timeout' as const, id: e.id };
-          if (kind === 'undercover') void this.dispatchUndercover(channel, timeout);
-          else if (kind === 'spyfall') void this.dispatchSpyfall(channel, timeout);
-          else if (kind === 'avalon') void this.dispatchAvalon(channel, timeout);
-          else if (kind === 'codenames') void this.dispatchCodenames(channel, timeout);
+          if (this.isOther(kind)) void this.dispatchGame(kind, channel, timeout);
           else void this.dispatch(channel, timeout);
         }, e.ms);
         return;
