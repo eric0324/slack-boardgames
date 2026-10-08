@@ -6,6 +6,7 @@ export const MIN_AVALON_PLAYERS = 5;
 export const MAX_AVALON_PLAYERS = 10;
 const TITLE = '阿瓦隆';
 const SPEECH_MS = 40_000;
+const PICK_MS = 90_000;
 const MAX_REJECTS = 5;
 
 // 人數 → 5 個任務的隊伍人數；7 人以上第 4 個任務要 2 張失敗票
@@ -42,6 +43,7 @@ export interface AState {
   quest: number; // 目前是第幾個任務（0 起算）
   results: ('success' | 'fail')[];
   rejects: number; // 這個任務連續被否決幾次
+  team: string[];
   speakers: string[];
   speaker?: string;
   timerSeq: number;
@@ -58,6 +60,8 @@ export type AAction =
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'endSpeech'; user: string }
   | { type: 'skipSpeaker'; user: string }
+  | { type: 'pickMember'; user: string; target: string }
+  | { type: 'confirmTeam'; user: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<AAction, { type: 'new' }>;
@@ -164,7 +168,7 @@ function nextSpeaker(c: Ctx) {
   const id = s.speakers.shift();
   s.speaker = id;
   if (!id) {
-    s.phase = 'pick';
+    startPick(c);
     return;
   }
   c.events.push({
@@ -175,6 +179,32 @@ function nextSpeaker(c: Ctx) {
     options: [{ value: id, label: '結束發言' }],
   });
   startTimer(c, SPEECH_MS);
+}
+
+const leaderOf = (s: AState) => s.players[s.leader].id;
+
+function startPick(c: Ctx) {
+  const s = c.s;
+  s.phase = 'pick';
+  s.team = [];
+  c.events.push(
+    {
+      type: 'prompt',
+      kind: 'pickMember',
+      audience: 'channel',
+      text: `👑 ${mention(leaderOf(s))} 請選 ${teamSize(s)} 位隊員（${PICK_MS / 1000} 秒）：按一下加入、再按一下移除`,
+      options: s.players.map((p) => ({ value: p.id, label: p.id })),
+    },
+    { type: 'prompt', kind: 'confirmTeam', audience: 'channel', text: '選好後按「確認隊伍」', options: [{ value: 'confirm', label: '確認隊伍' }] },
+  );
+  startTimer(c, PICK_MS);
+}
+
+function submitTeam(c: Ctx) {
+  const s = c.s;
+  s.team = s.players.map((p) => p.id).filter((id) => s.team.includes(id));
+  c.events.push({ type: 'announce', text: `🛡️ ${mention(leaderOf(s))} 提出的隊伍：${list(s.team)}` });
+  s.phase = 'teamVote';
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -260,9 +290,32 @@ function handle(c: Ctx, action: GameAction): boolean {
       nextSpeaker(c);
       return true;
     }
+    case 'pickMember': {
+      if (s.phase !== 'pick') return false;
+      if (action.user !== leaderOf(s)) return reply(c, action.user, '只有隊長可以選隊員。');
+      if (!s.players.some((p) => p.id === action.target)) return false;
+      if (s.team.includes(action.target)) s.team = s.team.filter((id) => id !== action.target);
+      else if (s.team.length >= teamSize(s)) return reply(c, action.user, `隊伍已經滿了（${teamSize(s)} 人），要換人請先移除。`);
+      else s.team.push(action.target);
+      reply(c, action.user, `目前隊伍（${s.team.length}／${teamSize(s)}）：${s.team.length ? list(s.team) : '還沒有人'}`);
+      return true;
+    }
+    case 'confirmTeam': {
+      if (s.phase !== 'pick') return false;
+      if (action.user !== leaderOf(s)) return reply(c, action.user, '只有隊長可以確認隊伍。');
+      const missing = teamSize(s) - s.team.length;
+      if (missing > 0) return reply(c, action.user, `隊伍還差 ${missing} 人。`);
+      submitTeam(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
       if (s.phase === 'speech') nextSpeaker(c);
+      else if (s.phase === 'pick') {
+        const rest = shuffle(s.players.map((p) => p.id).filter((id) => !s.team.includes(id)), c.rng);
+        s.team.push(...rest.slice(0, teamSize(s) - s.team.length));
+        submitTeam(c);
+      }
       else return false;
       return true;
     }
@@ -293,6 +346,7 @@ function createLobby(prev: AState | undefined, host: string, channel: string): R
     quest: 0,
     results: [],
     rejects: 0,
+    team: [],
     speakers: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},

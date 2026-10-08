@@ -174,3 +174,56 @@ describe('avalon/rounds: 隊長與輪流發言', () => {
     expect(finishSpeech(started(5).state).state.phase).toBe('pick');
   });
 });
+
+// 5 人局：隊長 p5，任務 1 需要 2 人
+const picking = () => finishSpeech(started(5).state);
+const pick = (targets: string[], s: AState, user = 'p5') =>
+  run(targets.map((target) => ({ type: 'pickMember', user, target }) as AAction), s);
+
+describe('avalon/rounds: 隊長選人', () => {
+  it('隊長收到選隊員按鈕（所有玩家）和確認按鈕，90 秒', () => {
+    const { events } = picking();
+    const p = prompts(events, 'pickMember').at(-1)!;
+    expect(p.text).toContain('<@p5> 請選 2 位隊員');
+    expect(values(p)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+    expect(prompts(events, 'confirmTeam')).toHaveLength(1);
+    expect(lastTimer(events).ms).toBe(90_000);
+  });
+
+  it('按一下加入、再按一下移除，只讓隊長看到目前的隊伍', () => {
+    const one = pick(['p1'], picking().state);
+    expect(one.state.team).toEqual(['p1']);
+    expect(ephemeralTo(one.events, 'p5')).toMatchObject({ text: expect.stringContaining('<@p1>') });
+    expect(announces(one.events)).toEqual([]);
+    expect(pick(['p1', 'p2', 'p1'], picking().state).state.team).toEqual(['p2']);
+  });
+
+  it('人數剛好才能確認；確認後公告隊伍並進入組隊投票', () => {
+    const one = pick(['p1'], picking().state).state;
+    const denied = run([{ type: 'confirmTeam', user: 'p5' }], one);
+    expect(denied.state.phase).toBe('pick');
+    expect(ephemeralTo(denied.events, 'p5')).toMatchObject({ text: expect.stringContaining('還差 1 人') });
+    const full = pick(['p2'], one).state;
+    expect(ephemeralTo(pick(['p3'], full).events, 'p5')).toMatchObject({ text: expect.stringContaining('已經滿了') });
+    const { state, events } = run([{ type: 'confirmTeam', user: 'p5' }], full);
+    expect(state.phase).toBe('teamVote');
+    expect(announces(events).join('\n')).toContain('隊伍：<@p1>、<@p2>');
+  });
+
+  it('只有隊長能選人和確認', () => {
+    const { state } = picking();
+    const denied = pick(['p1'], state, 'p2');
+    expect(denied.state.team).toEqual([]);
+    expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
+    expect(ephemeralTo(run([{ type: 'confirmTeam', user: 'p2' }], state).events, 'p2')).toBeDefined();
+  });
+
+  it('隊長 90 秒沒確認：隨機補滿隊伍並送出', () => {
+    const { state } = picking();
+    const one = pick(['p1'], state).state;
+    const after = run([{ type: 'timeout', id: one.timers.phase! }], one);
+    expect(after.state.phase).toBe('teamVote');
+    expect(after.state.team).toHaveLength(2);
+    expect(after.state.team).toContain('p1');
+  });
+});
