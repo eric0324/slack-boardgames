@@ -4,11 +4,12 @@ import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
 import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applyCodenames, type CAction, type CState } from './codenames.js';
+import { applyJustOne, type JAction, type JState } from './justone.js';
 import { applyLiarsDice, type LAction, type LState } from './liarsdice.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice' | 'justone';
 type OtherKind = Exclude<Kind, 'werewolf'>;
 
 // 狼人殺以外的遊戲都用同一套方式接上 adapter：engine、指令解析、按鈕對應、說明
@@ -62,6 +63,7 @@ const GAME_LIST = [
   '• 🏰 *阿瓦隆*（`avalon`）：5～10 人，開房 `/game avalon new`',
   '• 🟥 *機密代號*（`codenames`）：4～12 人（不支援 bot），開房 `/game codenames new`',
   '• 🎲 *吹牛骰*（`liarsdice`）：2～8 人，開房 `/game liarsdice new`',
+  '• 💡 *一字千金*（`justone`）：3～7 人（不支援 bot），開房 `/game justone new`',
   '各遊戲的指令：`/game <遊戲代號> help`，例如 `/game liarsdice help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
@@ -124,6 +126,17 @@ const LIARSDICE_HELP = [
   '• `/game liarsdice bid <數量> <點數>`：喊「全場至少有 N 個 X 點」（輪到你時）',
   '• `/game liarsdice cancel`：取消遊戲（房主）',
   '覺得上一個喊數是吹牛就按「開！」；1 點是萬用，這一輪有人喊過 1 點就不再萬用',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const JUSTONE_HELP = [
+  '*一字千金指令*',
+  '• `/game justone new`：開房（任何人）',
+  '• `/game justone start`：開始遊戲，需要 3～7 位真人（房主）',
+  '• `/game justone clue <詞>`：給一個提示（猜詞以外的人，其他人看不到你打的字）',
+  '• `/game justone guess <詞>`：猜詞（猜詞的人），沒把握可以按「跳過」',
+  '• `/game justone next`：跳過卡住的步驟（房主）',
+  '• `/game justone cancel`：取消遊戲（房主）',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -212,6 +225,22 @@ export function parseLiarsDiceCommand(text: string, user: string, channel: strin
 
 function liarsDiceButton(kind: string, _value: string, user: string, channel: string): LAction | null {
   if (kind === 'join' || kind === 'leave' || kind === 'start' || kind === 'challenge') return { type: kind, user };
+  if (kind === 'rematch') return { type: 'rematch', user, channel };
+  return null;
+}
+
+// 一字千金的子指令：clue <詞>、guess <詞>，next 是跳過卡住的步驟
+export function parseJustOneCommand(text: string, user: string, channel: string): JAction | null {
+  const [sub, ...rest] = text.trim().split(/\s+/);
+  if (sub === 'clue' || sub === 'guess') return rest.length ? { type: sub, user, word: rest.join(' ') } : null;
+  if (sub === 'next') return { type: 'skipStep', user };
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || !['new', 'start', 'cancel', 'addBot', 'removeBot'].includes(action.type)) return null;
+  return action as JAction;
+}
+
+function justOneButton(kind: string, _value: string, user: string, channel: string): JAction | null {
+  if (kind === 'join' || kind === 'leave' || kind === 'start' || kind === 'skipGuess') return { type: kind, user };
   if (kind === 'rematch') return { type: 'rematch', user, channel };
   return null;
 }
@@ -340,6 +369,7 @@ export class GameHost {
   avalonGames = new Map<string, AState>();
   codenamesGames = new Map<string, CState>();
   liarsDiceGames = new Map<string, LState>();
+  justOneGames = new Map<string, JState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private boardTs = new Map<string, string>(); // 機密代號的牌桌訊息
@@ -367,6 +397,7 @@ export class GameHost {
       avalon: { states: this.avalonGames, apply: applyAvalon, parse: parseAvalonCommand, button: avalonButton, help: AVALON_HELP },
       codenames: { states: this.codenamesGames, apply: applyCodenames, parse: parseCodenamesCommand, button: codenamesButton, help: CODENAMES_HELP },
       liarsdice: { states: this.liarsDiceGames, apply: applyLiarsDice, parse: parseLiarsDiceCommand, button: liarsDiceButton, help: LIARSDICE_HELP },
+      justone: { states: this.justOneGames, apply: applyJustOne, parse: parseJustOneCommand, button: justOneButton, help: JUSTONE_HELP },
     };
   }
 
