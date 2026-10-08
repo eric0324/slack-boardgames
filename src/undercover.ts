@@ -56,6 +56,7 @@ export interface UState {
 
 export type UAction =
   | { type: 'new'; user: string; channel: string }
+  | { type: 'rematch'; user: string; channel: string }
   | { type: 'join'; user: string }
   | { type: 'leave'; user: string }
   | { type: 'start'; user: string }
@@ -264,9 +265,20 @@ function finishGuess(c: Ctx, word: string | undefined) {
   continueGame(c);
 }
 
-// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪（勝負判定在 task 4.1 補上）
+// 臥底陣營（臥底＋白板）全部出局 → 平民勝；臥底陣營 ≥ 平民 → 臥底陣營勝
+export function checkUndercoverWinner(players: UPlayer[]): 'civilian' | 'undercover' | null {
+  const living = players.filter((p) => p.alive);
+  const undercoverSide = living.filter((p) => p.role !== 'civilian').length;
+  if (undercoverSide === 0) return 'civilian';
+  if (undercoverSide >= living.length - undercoverSide) return 'undercover';
+  return null;
+}
+
+// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪
 function continueGame(c: Ctx) {
-  startRound(c);
+  const winner = checkUndercoverWinner(c.s.players);
+  if (winner) endGame(c, winner);
+  else startRound(c);
 }
 
 function endGame(c: Ctx, winner: 'civilian' | 'undercover') {
@@ -303,7 +315,7 @@ const reply = (c: Ctx, to: string, text: string) => {
   return false;
 };
 
-function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
+function handle(c: Ctx, action: Exclude<UAction, { type: 'new' } | { type: 'rematch' }>): boolean {
   const s = c.s;
   switch (action.type) {
     case 'join': {
@@ -418,28 +430,40 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
 }
 
 export function applyUndercover(state: UState | undefined, action: UAction, rng: Rng): Result {
+  const busy = (user: string): Result => ({ state: state!, events: [{ type: 'ephemeral', to: user, text: '這個頻道已經有遊戲了。' }] });
   if (action.type === 'new') {
-    if (state && state.phase !== 'ended') {
-      return { state, events: [{ type: 'ephemeral', to: action.user, text: '這個頻道已經有遊戲了。' }] };
+    if (state && state.phase !== 'ended') return busy(action.user);
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return busy(action.user);
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
     }
-    const created: UState = {
-      game: 'undercover',
-      channel: action.channel,
-      host: action.user,
-      phase: 'lobby',
-      players: [{ id: action.user, alive: true }],
-      timerSeq: state?.timerSeq ?? 0,
-      timers: {},
-      round: 0,
-      speakers: [],
-      votes: {},
-      candidates: [],
-      voters: [],
-    };
-    return { state: created, events: [lobbyEvent(created)] };
+    return createLobby(state, action.user, action.channel);
   }
   if (!state || state.phase === 'ended') return { state: state!, events: [] };
   const c: Ctx = { s: structuredClone(state), events: [], rng };
   const changed = handle(c, action);
   return { state: changed ? c.s : state, events: c.events };
+}
+
+function createLobby(prev: UState | undefined, host: string, channel: string): Result {
+  const created: UState = {
+    game: 'undercover',
+    channel,
+    host,
+    phase: 'lobby',
+    players: [{ id: host, alive: true }],
+    timerSeq: prev?.timerSeq ?? 0,
+    timers: {},
+    round: 0,
+    speakers: [],
+    votes: {},
+    candidates: [],
+    voters: [],
+  };
+  return { state: created, events: [lobbyEvent(created)] };
 }

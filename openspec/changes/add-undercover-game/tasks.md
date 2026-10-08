@@ -19,7 +19,7 @@
 
 ## 4. 誰是臥底 engine：勝負
 
-- [ ] 4.1 勝負判定、結束公開身分和詞、再來一局，確認 undercover/win-condition 的 scenarios 測試通過
+- [x] 4.1 勝負判定、結束公開身分和詞、再來一局，確認 undercover/win-condition 的 scenarios 測試通過
 
 ## 5. 誰是臥底 engine：bot
 

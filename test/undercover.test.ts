@@ -307,3 +307,58 @@ describe('undercover/rounds: 白板猜詞', () => {
     expect(ephemeralTo(denied.events, 'p3')).toMatchObject({ text: '現在不能猜詞。' });
   });
 });
+
+const nextVote = (s: UState) => run([{ type: 'endDiscussion', user: 'p1' }], s).state;
+
+describe('undercover/win-condition: 勝負判定', () => {
+  it('臥底全部出局（沒有白板的局）：平民獲勝', () => {
+    const { state } = run(votes([['p2', 'p1'], ['p3', 'p1'], ['p4', 'p1'], ['p1', 'p2']]), voting4().state);
+    expect(state).toMatchObject({ phase: 'ended', winner: 'civilian' });
+  });
+
+  it('臥底和白板都出局：平民獲勝（白板猜錯之後判定）', () => {
+    const afterUndercover = exile6('p1').state;
+    const guessing = exile6('p2', nextVote(afterUndercover)).state;
+    const after = run([{ type: 'guess', user: 'p2', word: guessing.words!.undercover }], guessing);
+    expect(after.state).toMatchObject({ phase: 'ended', winner: 'civilian' });
+  });
+
+  it('臥底陣營追上平民：臥底陣營獲勝', () => {
+    // 6 人局放逐兩位平民後：1 臥底、1 白板、2 平民
+    const round2 = exile6('p3').state;
+    const { state } = exile6('p4', nextVote(round2));
+    expect(state).toMatchObject({ phase: 'ended', winner: 'undercover' });
+  });
+
+  it('還沒分出勝負：開始下一輪', () => {
+    const { state } = run(votes([['p1', 'p4'], ['p2', 'p4'], ['p3', 'p4'], ['p4', 'p1']]), voting4().state);
+    expect(state).toMatchObject({ phase: 'speech', round: 2 });
+  });
+});
+
+describe('undercover/win-condition: 結束公開與再來一局', () => {
+  const ended = () => run(votes([['p2', 'p1'], ['p3', 'p1'], ['p4', 'p1'], ['p1', 'p2']]), voting4().state);
+
+  it('公告獲勝陣營、兩個詞，以及每個人的身分、詞和存活狀態', () => {
+    const { state, events } = ended();
+    const text = announces(events).find((t) => t.includes('遊戲結束'))!;
+    expect(text).toContain('平民獲勝');
+    expect(text).toContain(`平民詞：${state.words!.civilian}／臥底詞：${state.words!.undercover}`);
+    expect(text).toMatch(new RegExp(`<@p1>.*臥底.*${state.words!.undercover}.*出局`));
+    expect(text).toMatch(new RegExp(`<@p2>.*平民.*${state.words!.civilian}.*存活`));
+    expect(prompts(events, 'rematch')).toHaveLength(1);
+  });
+
+  it('上一局的玩家按再來一局：開一個新的誰是臥底房間', () => {
+    const { state, events } = run([{ type: 'rematch', user: 'p3', channel: 'C1' }], ended().state);
+    expect(state).toMatchObject({ game: 'undercover', phase: 'lobby', host: 'p3' });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', title: '誰是臥底', host: 'p3' }));
+  });
+
+  it('不是上一局的玩家不能按；取消的遊戲沒有再來一局', () => {
+    const outsider = run([{ type: 'rematch', user: 'X', channel: 'C1' }], ended().state);
+    expect(ephemeralTo(outsider.events, 'X')).toBeDefined();
+    const cancelled = run([{ type: 'cancel', user: 'p1' }], startedU(4).state).state;
+    expect(run([{ type: 'rematch', user: 'p2', channel: 'C1' }], cancelled).events).toEqual([]);
+  });
+});
