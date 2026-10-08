@@ -1,6 +1,6 @@
 // 阿瓦隆遊戲引擎：純邏輯，不碰任何 I/O。介面和其他遊戲一樣：applyAvalon(state, action, rng) → { state, events }。
 import { randomBotName } from './botLines.js';
-import { isBot, type GameEvent, type Rng } from './engine.js';
+import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 
 export const MIN_AVALON_PLAYERS = 5;
 export const MAX_AVALON_PLAYERS = 10;
@@ -8,9 +8,17 @@ const TITLE = '阿瓦隆';
 
 export type APhase = 'lobby' | 'speech' | 'pick' | 'teamVote' | 'quest' | 'assassinate' | 'ended';
 
+export type ARole = 'merlin' | 'percival' | 'loyal' | 'assassin' | 'morgana' | 'minion';
+
 export interface APlayer {
   id: string;
+  role?: ARole;
 }
+
+// 人數 → [好人, 壞人]
+const TEAM_SIZES: Record<number, [number, number]> = { 5: [3, 2], 6: [4, 2], 7: [4, 3], 8: [5, 3], 9: [6, 3], 10: [6, 4] };
+const EVIL: ARole[] = ['assassin', 'morgana', 'minion'];
+export const isEvil = (role?: ARole) => EVIL.includes(role!);
 
 export interface AState {
   game: 'avalon';
@@ -52,6 +60,60 @@ const lobbyEvent = (s: AState): GameEvent => ({
   players: s.players.map((p) => p.id),
   open: s.phase === 'lobby',
 });
+
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+const list = (ids: string[]) => ids.map(mention).join('、');
+
+const ROLE_INTRO: Record<ARole, string> = {
+  merlin: '🧙 你是梅林（好人）。',
+  percival: '🛡️ 你是派西維爾（好人）。',
+  loyal: '⚔️ 你是忠臣（好人）。\n幫助好人完成 3 個任務。',
+  assassin: '🗡️ 你是刺客（壞人）。',
+  morgana: '🔮 你是莫甘娜（壞人）。',
+  minion: '😈 你是爪牙（壞人）。',
+};
+
+// 發身分：依人數組出身分清單後洗牌，私訊每個人自己的身分和能看到的資訊
+function deal(c: Ctx) {
+  const s = c.s;
+  const [good, evil] = TEAM_SIZES[s.players.length];
+  const deck: ARole[] = [
+    'merlin',
+    'percival',
+    ...Array<ARole>(good - 2).fill('loyal'),
+    'assassin',
+    'morgana',
+    ...Array<ARole>(evil - 2).fill('minion'),
+  ];
+  const dealt = shuffle(deck, c.rng);
+  s.players.forEach((p, i) => (p.role = dealt[i]));
+  const evilIds = s.players.filter((p) => isEvil(p.role)).map((p) => p.id);
+  const idsOf = (...rs: ARole[]) => s.players.filter((p) => rs.includes(p.role!)).map((p) => p.id);
+  c.events.push({
+    type: 'announce',
+    text: `🏰 阿瓦隆開始！玩家：${list(s.players.map((p) => p.id))}\n好人 ${good} 位、壞人 ${evil} 位。身分已經用私訊傳給大家，請到和 bot 的私訊查看。`,
+    gif: 'start',
+  });
+  for (const p of s.players) {
+    const others = evilIds.filter((id) => id !== p.id);
+    let extra = '';
+    if (p.role === 'merlin') extra = `\n壞人是：${list(evilIds)}\n小心別讓壞人發現你是梅林，不然最後會被刺殺。`;
+    else if (p.role === 'percival') extra = `\n${list(idsOf('merlin', 'morgana'))} 其中一位是梅林、另一位是莫甘娜。`;
+    else if (isEvil(p.role)) extra = `\n你的同伴：${list(others)}`;
+    if (p.role === 'assassin') extra += '\n好人完成 3 個任務時，你可以刺殺梅林翻盤。';
+    if (p.role === 'morgana') extra += '\n派西維爾會把你和梅林搞混，好好利用。';
+    c.events.push({ type: 'dm', to: p.id, text: ROLE_INTRO[p.role!] + extra });
+  }
+  c.events.push({ type: 'wolfChat', wolves: evilIds, text: `😈 這是壞人的私訊群組：${list(evilIds)}\n可以在這裡討論，好人看不到。` });
+}
 
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
@@ -112,6 +174,7 @@ function handle(c: Ctx, action: GameAction): boolean {
       const n = s.players.length;
       if (n < MIN_AVALON_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_AVALON_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'speech' }));
+      deal(c);
       s.phase = 'speech';
       return true;
     }

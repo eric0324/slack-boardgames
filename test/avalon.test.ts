@@ -61,3 +61,67 @@ describe('avalon/setup: 阿瓦隆的房間', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'lobby', open: false }));
   });
 });
+
+// rng 固定時不洗牌：身分依「好人（梅林、派西維爾、忠臣…）→ 壞人（刺客、莫甘娜、爪牙…）」照玩家順序發
+const started = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+const roles = (s: AState) => s.players.map((p) => p.role);
+
+describe('avalon/setup: 身分配置', () => {
+  it.each([
+    [5, 3, 2],
+    [6, 4, 2],
+    [7, 4, 3],
+    [8, 5, 3],
+    [9, 6, 3],
+    [10, 6, 4],
+  ])('%i 人：%i 好人、%i 壞人，梅林、派西維爾、刺客、莫甘娜各 1 位', (n, good, evil) => {
+    const r = roles(started(n).state);
+    const evilRoles = ['assassin', 'morgana', 'minion'];
+    expect(r.filter((x) => !evilRoles.includes(x!))).toHaveLength(good);
+    expect(r.filter((x) => evilRoles.includes(x!))).toHaveLength(evil);
+    for (const one of ['merlin', 'percival', 'assassin', 'morgana']) expect(r.filter((x) => x === one)).toHaveLength(1);
+  });
+
+  it('身分是隨機的', () => {
+    expect(roles(started(7, () => 0).state)).not.toEqual(roles(started(7).state));
+  });
+});
+
+// 5 人局：p1 梅林、p2 派西維爾、p3 忠臣、p4 刺客、p5 莫甘娜
+describe('avalon/setup: 身分私訊', () => {
+  it('梅林知道所有壞人', () => {
+    const text = dmTo(started(5).events, 'p1')!.text;
+    expect(text).toContain('你是梅林');
+    expect(text).toContain('<@p4>');
+    expect(text).toContain('<@p5>');
+    expect(text).not.toContain('<@p2>');
+  });
+
+  it('派西維爾知道梅林和莫甘娜是哪兩位，但不知道誰是誰', () => {
+    const text = dmTo(started(5).events, 'p2')!.text;
+    expect(text).toContain('你是派西維爾');
+    expect(text).toContain('<@p1>、<@p5> 其中一位是梅林、另一位是莫甘娜');
+  });
+
+  it('壞人知道其他壞人，忠臣沒有額外資訊', () => {
+    const { events } = started(7);
+    expect(dmTo(events, 'p5')!.text).toContain('你是刺客');
+    expect(dmTo(events, 'p5')!.text).toContain('<@p6>、<@p7>');
+    expect(dmTo(events, 'p6')!.text).toContain('你是莫甘娜');
+    expect(dmTo(events, 'p7')!.text).toContain('你是爪牙');
+    expect(dmTo(events, 'p7')!.text).toContain('<@p5>、<@p6>');
+    expect(dmTo(events, 'p3')!.text).toContain('你是忠臣');
+    expect(dmTo(events, 'p3')!.text).not.toContain('<@');
+  });
+
+  it('壞人被拉進私訊群組', () => {
+    expect(started(5).events).toContainEqual(expect.objectContaining({ type: 'wolfChat', wolves: ['p4', 'p5'] }));
+  });
+
+  it('頻道公告只有人數和查看私訊的提醒，不洩漏身分', () => {
+    const text = announces(started(5).events).join('\n');
+    expect(text).toContain('好人 3 位、壞人 2 位');
+    expect(text).toContain('私訊');
+    for (const name of ['梅林', '派西維爾', '忠臣', '刺客', '莫甘娜', '爪牙']) expect(text).not.toMatch(new RegExp(`<@p\\d>\\S*${name}`));
+  });
+});
