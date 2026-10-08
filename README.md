@@ -6,10 +6,11 @@
 
 - **狼人殺**（`/game werewolf`，或 `/werewolf`）：6～12 人，角色有狼人、狼王、村民、預言家、女巫、騎士，採用屠邊規則；人不夠時可以加 bot 補位
 - **誰是臥底**（`/game undercover`）：4～12 人，身分有平民、臥底、白板；輪流描述自己拿到的詞，投票找出臥底；人不夠時可以加 bot 補位
+- **間諜危機**（`/game spyfall`）：4～10 人，大家知道同一個地點，只有間諜不知道；接力互相提問，時間到投票抓間諜，間諜也可以隨時猜地點；人不夠時可以加 bot 補位
 
 輸入 `/game` 可以看到所有遊戲和開房指令。
 
-各遊戲的玩法和指令請看 [wiki](https://github.com/eric0324/slack-gamebuddy/wiki)。誰是臥底：[遊戲規則](https://github.com/eric0324/slack-gamebuddy/wiki/誰是臥底-遊戲規則)、[指令](https://github.com/eric0324/slack-gamebuddy/wiki/誰是臥底-指令)。狼人殺：[遊戲規則](https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-遊戲規則)、[指令](https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-指令)。
+各遊戲的玩法和指令請看 [wiki](https://github.com/eric0324/slack-gamebuddy/wiki)。間諜危機：[遊戲規則](https://github.com/eric0324/slack-gamebuddy/wiki/間諜危機-遊戲規則)、[指令](https://github.com/eric0324/slack-gamebuddy/wiki/間諜危機-指令)。誰是臥底：[遊戲規則](https://github.com/eric0324/slack-gamebuddy/wiki/誰是臥底-遊戲規則)、[指令](https://github.com/eric0324/slack-gamebuddy/wiki/誰是臥底-指令)。狼人殺：[遊戲規則](https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-遊戲規則)、[指令](https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-指令)。
 
 ## 建立 Slack App
 
@@ -24,8 +25,8 @@
        always_online: true
      slash_commands:
        - command: /game
-         description: 桌遊（狼人殺、誰是臥底）
-         usage_hint: werewolf new | undercover new | help
+         description: 桌遊（狼人殺、誰是臥底、間諜危機）
+         usage_hint: werewolf new | undercover new | spyfall new | help
          should_escape: true
        - command: /werewolf
          description: 狼人殺

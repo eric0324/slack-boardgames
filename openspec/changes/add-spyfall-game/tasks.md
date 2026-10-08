@@ -28,7 +28,7 @@
 ## 6. Slack adapter 與文件
 
 - [x] 6.1 adapter 加入間諜危機：狀態 Map、`/game spyfall` 指令解析與說明、`/game` 遊戲清單、按鈕（askTarget、endAnswer 和共用按鈕）、計時、一個頻道只能一局；確認 game-commands 修改後的 scenarios 測試通過，既有兩款遊戲的測試維持通過
-- [ ] 6.2 manifest 的 `/game` usage hint、README、wiki（首頁、間諜危機入口頁、規則頁、指令頁、側邊欄）
+- [x] 6.2 manifest 的 `/game` usage hint、README、wiki（首頁、間諜危機入口頁、規則頁、指令頁、側邊欄）
 
 ## 7. 整合驗證
 
