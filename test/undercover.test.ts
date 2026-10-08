@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent } from '../src/engine.js';
-import { applyUndercover, type UAction, type UState } from '../src/undercover.js';
+import { applyUndercover, UNDERCOVER_TABLE, type UAction, type UState } from '../src/undercover.js';
+import { WORD_PAIRS } from '../src/undercoverWords.js';
 
 const rng = () => 0.99999;
 
@@ -80,5 +81,64 @@ describe('undercover/setup: 誰是臥底的房間', () => {
     expect(state.phase).toBe('ended');
     expect(events.some((e) => e.type === 'announce' && e.text.includes('取消'))).toBe(true);
     expect(run([{ type: 'join', user: 'x' }], state).events).toEqual([]);
+  });
+});
+
+// rng 固定時不洗牌：先發臥底、再發白板、其他是平民。例如 6 人局：p1 臥底、p2 白板、p3~p6 平民
+const startedU = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+const count = (s: UState) =>
+  s.players.reduce<Record<string, number>>((acc, p) => ({ ...acc, [p.role!]: (acc[p.role!] ?? 0) + 1 }), {});
+
+describe('undercover/setup: 身分配置', () => {
+  it('4 人局：3 平民、1 臥底，沒有白板', () => {
+    expect(count(startedU(4).state)).toEqual({ civilian: 3, undercover: 1 });
+  });
+
+  it('9 人局：6 平民、2 臥底、1 白板', () => {
+    expect(count(startedU(9).state)).toEqual({ civilian: 6, undercover: 2, blank: 1 });
+  });
+
+  it('4～12 人的身分總數都等於人數', () => {
+    for (let n = 4; n <= 12; n++) {
+      const total = Object.values(UNDERCOVER_TABLE[n]).reduce((a, b) => a + b, 0);
+      expect(total, `${n} 人`).toBe(n);
+    }
+  });
+
+  it('頻道公告只寫各身分的數量，不寫誰是什麼身分，並提醒查看私訊', () => {
+    const text = startedU(6)
+      .events.filter((e) => e.type === 'announce')
+      .map((e) => (e as { text: string }).text)
+      .join('\n');
+    expect(text).toContain('4 平民、1 臥底、1 白板');
+    expect(text).toContain('私訊');
+    expect(text).not.toMatch(/<@p\d+>\s*[:：]?\s*(是)?\s*(平民|臥底|白板)/);
+  });
+});
+
+describe('undercover/setup: 私訊發詞', () => {
+  it('平民和臥底只收到自己的詞，不知道自己的身分', () => {
+    const { state, events } = startedU(6);
+    const { civilian, undercover } = state.words!;
+    expect(civilian).not.toBe(undercover);
+    const dm = (id: string) => events.find((e) => e.type === 'dm' && e.to === id) as { text: string };
+    expect(dm('p1').text).toContain(`你的詞是：${undercover}`);
+    expect(dm('p3').text).toContain(`你的詞是：${civilian}`);
+    for (const id of ['p1', 'p3']) expect(dm(id).text).not.toMatch(/平民|臥底|白板/);
+  });
+
+  it('白板收到「你是白板，沒有拿到詞」', () => {
+    const { events } = startedU(6);
+    expect(events.find((e) => e.type === 'dm' && e.to === 'p2')).toMatchObject({
+      text: expect.stringContaining('你是白板，沒有拿到詞'),
+    });
+  });
+
+  it('兩個詞來自詞庫的同一組，哪一個是平民詞是隨機的', () => {
+    const pick = (r: () => number) => startedU(4, r).state.words!;
+    const [x, y] = [pick(() => 0), pick(() => 0.99999)];
+    for (const w of [x, y]) {
+      expect(WORD_PAIRS.some(({ a, b }) => (a.word === w.civilian && b.word === w.undercover) || (b.word === w.civilian && a.word === w.undercover))).toBe(true);
+    }
   });
 });

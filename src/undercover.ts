@@ -1,13 +1,29 @@
 // 誰是臥底遊戲引擎：純邏輯，不碰任何 I/O。介面和狼人殺一樣：applyUndercover(state, action, rng) → { state, events }。
 // events 沿用狼人殺的 GameEvent，adapter 的 send() 可以共用。
 import { randomBotName } from './botLines.js';
-import { isBot, MAX_PLAYERS, type GameEvent, type Rng } from './engine.js';
+import { isBot, MAX_PLAYERS, mention, type GameEvent, type Rng } from './engine.js';
+import { WORD_PAIRS } from './undercoverWords.js';
 
 export const MIN_UNDERCOVER_PLAYERS = 4;
 const TITLE = '誰是臥底';
 
 export type UPhase = 'lobby' | 'speech' | 'ended';
 export type URole = 'civilian' | 'undercover' | 'blank';
+
+export const ROLE_NAME_U: Record<URole, string> = { civilian: '平民', undercover: '臥底', blank: '白板' };
+
+// 人數 → 各身分數量
+export const UNDERCOVER_TABLE: Record<number, Record<URole, number>> = {
+  4: { civilian: 3, undercover: 1, blank: 0 },
+  5: { civilian: 4, undercover: 1, blank: 0 },
+  6: { civilian: 4, undercover: 1, blank: 1 },
+  7: { civilian: 5, undercover: 1, blank: 1 },
+  8: { civilian: 6, undercover: 1, blank: 1 },
+  9: { civilian: 6, undercover: 2, blank: 1 },
+  10: { civilian: 7, undercover: 2, blank: 1 },
+  11: { civilian: 8, undercover: 2, blank: 1 },
+  12: { civilian: 9, undercover: 2, blank: 1 },
+};
 
 export interface UPlayer {
   id: string;
@@ -24,6 +40,7 @@ export interface UState {
   players: UPlayer[];
   timerSeq: number;
   timers: { phase?: number };
+  words?: { civilian: string; undercover: string };
 }
 
 export type UAction =
@@ -45,6 +62,47 @@ interface Ctx {
   s: UState;
   events: GameEvent[];
   rng: Rng;
+}
+
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 發牌：不洗牌時的順序是臥底、白板、平民
+function deal(c: Ctx) {
+  const s = c.s;
+  const table = UNDERCOVER_TABLE[s.players.length];
+  const roles = shuffle(
+    (['undercover', 'blank', 'civilian'] as URole[]).flatMap((r) => Array<URole>(table[r]).fill(r)),
+    c.rng,
+  );
+  const pair = WORD_PAIRS[Math.floor(c.rng() * WORD_PAIRS.length)];
+  const [civilian, undercover] = c.rng() < 0.5 ? [pair.a.word, pair.b.word] : [pair.b.word, pair.a.word];
+  s.words = { civilian, undercover };
+  s.players.forEach((p, i) => {
+    p.role = roles[i];
+    p.word = p.role === 'civilian' ? civilian : p.role === 'undercover' ? undercover : undefined;
+  });
+  const setup = (['civilian', 'undercover', 'blank'] as URole[])
+    .filter((r) => table[r])
+    .map((r) => `${table[r]} ${ROLE_NAME_U[r]}`)
+    .join('、');
+  c.events.push({
+    type: 'announce',
+    text: `🎲 誰是臥底開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n身分配置：${setup}\n每個人的詞已經用私訊傳給大家，請到和 bot 的私訊查看。`,
+    gif: 'start',
+  });
+  for (const p of s.players) {
+    const text = p.word
+      ? `你的詞是：${p.word}\n輪到你時，用一句話描述它，不要說得太明白。`
+      : '你是白板，沒有拿到詞。\n仔細聽別人的描述，假裝自己也有詞；被投出去時還有一次猜詞的機會。';
+    c.events.push({ type: 'dm', to: p.id, text });
+  }
 }
 
 const lobbyEvent = (s: UState): GameEvent => ({
@@ -117,6 +175,7 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
       }
       s.phase = 'speech';
       c.events.push(lobbyEvent(s));
+      deal(c);
       return true;
     }
     case 'cancel': {
