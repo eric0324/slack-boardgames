@@ -55,6 +55,7 @@ export type HAction =
   | { type: 'peek'; user: string }
   | { type: 'play'; user: string; index: number }
   | { type: 'discard'; user: string; index: number }
+  | { type: 'hint'; user: string; target: string; color?: Color; number?: number }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<HAction, { type: 'new' }>;
@@ -192,6 +193,31 @@ function discardCard(c: Ctx, user: string, index: number): boolean {
   return true;
 }
 
+// 提示：花 1 個標記，告訴對方他手上所有某個顏色或某個數字的牌
+function giveHint(c: Ctx, user: string, targetId: string, color?: Color, number?: number): boolean {
+  const s = c.s;
+  if (s.phase !== 'turn' || user !== currentId(s)) return reply(c, user, '還沒輪到你。');
+  if (s.hints <= 0) return reply(c, user, '沒有提示標記了，只能出牌或棄牌。');
+  if (targetId === user) return reply(c, user, '不能提示自己。');
+  const t = s.players.find((p) => p.id === targetId);
+  if (!t) return reply(c, user, '這個人不在這局遊戲裡。');
+  const match = (x: HCard) => (color ? x.color === color : x.n === number);
+  const slots = t.hand.map((x, i) => [x, i] as const).filter(([x]) => match(x));
+  if (!slots.length) return reply(c, user, '提示要至少指出一張牌。');
+  for (const [x] of slots) {
+    if (color) x.knowColor = true;
+    else x.knowNumber = true;
+  }
+  s.hints--;
+  const what = color ? `${COLOR_NAME[color]}色` : ` ${number}`;
+  c.events.push({
+    type: 'announce',
+    text: `💬 ${mention(user)} 提示 ${mention(t.id)}：第 ${slots.map(([, i]) => i + 1).join('、')} 張是${what}`,
+  });
+  endTurn(c);
+  return true;
+}
+
 function endTurn(c: Ctx) {
   const s = c.s;
   s.turn = (s.turn + 1) % s.players.length;
@@ -252,6 +278,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       return playCard(c, action.user, action.index);
     case 'discard':
       return discardCard(c, action.user, action.index);
+    case 'hint':
+      return giveHint(c, action.user, action.target, action.color, action.number);
     case 'timeout':
       return false;
   }

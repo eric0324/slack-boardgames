@@ -156,3 +156,35 @@ describe('hanabi/turns: 棄牌', () => {
     expect(ephemeralTo(events, 'p2')).toMatchObject({ text: expect.stringContaining('提示標記滿了') });
   });
 });
+
+const hint = (user: string, target: string, value: { color?: string; number?: number }, s: HState) =>
+  run([{ type: 'hint', user, target, ...value } as HAction], s);
+describe('hanabi/turns: 提示', () => {
+  it('提示顏色：標記減 1，公告所有符合的位置，被提示的牌記住', () => {
+    const { state, events } = hint('p2', 'p1', { color: 'red' }, started(2).state);
+    expect(state.hints).toBe(7);
+    expect(announces(events).join('\n')).toContain('<@p2> 提示 <@p1>：第 1、2、3、4、5 張是紅色');
+    expect(state.players[0].hand.every((x) => x.knowColor)).toBe(true);
+    expect(state.turn).toBe(0);
+  });
+
+  it('提示數字：之後看牌會顯示', () => {
+    const { state, events } = hint('p2', 'p1', { number: 2 }, started(2).state);
+    expect(announces(events).join('\n')).toContain('第 4、5 張是 2');
+    const peeked = run([{ type: 'peek', user: 'p1' }], state);
+    expect((ephemeralTo(peeked.events, 'p1') as { text: string }).text).toContain('第 4 張：？2');
+  });
+
+  it('至少要指出一張牌、要有提示標記、不能提示自己', () => {
+    const s = started(2).state;
+    for (const [user, target, value, s2, text] of [
+      ['p2', 'p1', { number: 3 }, s, '至少'],
+      ['p2', 'p1', { color: 'red' }, { ...s, hints: 0 }, '沒有提示標記'],
+      ['p2', 'p2', { color: 'red' }, s, '不能提示自己'],
+    ] as [string, string, { color?: string; number?: number }, HState, string][]) {
+      const res = hint(user, target, value, s2);
+      expect(res.state.turn).toBe(1);
+      expect(ephemeralTo(res.events, user)).toMatchObject({ text: expect.stringContaining(text) });
+    }
+  });
+});
