@@ -2,6 +2,7 @@
 import { applyAction, isBot, MAX_PLAYERS, mention, RULES_URL, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
 import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
+import { applyUndercover, type UAction, type UState } from './undercover.js';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -34,6 +35,76 @@ const HELP = [
   '• `/werewolf stats [@某人]`：查詢自己或別人在這個頻道的戰績（任何人）',
   `📖 完整說明：<${encodeURI('https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-指令')}|指令>、<${RULES_URL}|遊戲規則>`,
 ].join('\n');
+
+const WIKI = 'https://github.com/eric0324/slack-gamebuddy/wiki';
+
+const GAME_LIST = [
+  '*可以玩的遊戲*',
+  '• 🐺 *狼人殺*（`werewolf`）：6～12 人，開房 `/game werewolf new`（或 `/werewolf new`）',
+  '• 🕵️ *誰是臥底*（`undercover`）：4～12 人，開房 `/game undercover new`',
+  '各遊戲的指令：`/game werewolf help`、`/game undercover help`',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const UNDERCOVER_HELP = [
+  '*誰是臥底指令*',
+  '• `/game undercover new`：開房（任何人）',
+  '• `/game undercover addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game undercover removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game undercover start`：開始遊戲，需要 4～12 人（房主）',
+  '• `/game undercover next`：跳過目前的描述者（房主）',
+  '• `/game undercover vote`：結束描述，直接投票（房主）',
+  '• `/game undercover cancel`：取消遊戲（房主）',
+  '• `/game undercover guess <詞>`：被投出去的白板猜平民詞（60 秒內）',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const NOT_APPLICABLE = '這個指令不適用於目前的遊戲。';
+const BUSY = '這個頻道已經有遊戲了。';
+
+export function parseUndercoverCommand(text: string, user: string, channel: string): UAction | null {
+  const [sub, ...rest] = text.trim().split(/\s+/);
+  switch (sub) {
+    case 'new':
+      return { type: 'new', user, channel };
+    case 'start':
+      return { type: 'start', user };
+    case 'cancel':
+      return { type: 'cancel', user };
+    case 'next':
+      return { type: 'skipSpeaker', user };
+    case 'vote':
+      return { type: 'endDiscussion', user };
+    case 'guess':
+      return rest.length ? { type: 'guess', user, word: rest.join(' ') } : null;
+    case 'addbot':
+    case 'removebot': {
+      const count = rest[0] === undefined ? 1 : Number(rest[0]);
+      if (rest.length > 1 || !Number.isInteger(count) || count < 1) return null;
+      return { type: sub === 'addbot' ? 'addBot' : 'removeBot', user, count };
+    }
+    default:
+      return null;
+  }
+}
+
+// 誰是臥底的按鈕和狼人殺共用 action_id 的種類
+function undercoverButton(kind: string, value: string, user: string, channel: string): UAction | null {
+  switch (kind) {
+    case 'join':
+    case 'leave':
+    case 'start':
+    case 'endSpeech':
+      return { type: kind, user };
+    case 'dayVote':
+    case 'pkVote':
+      return { type: 'dayVote', user, target: value };
+    case 'rematch':
+      return { type: 'rematch', user, channel };
+    default:
+      return null;
+  }
+}
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {
   const [sub, arg, ...rest] = text.trim().split(/\s+/);
@@ -96,6 +167,8 @@ const button = (kind: string, i: number, label: string, channel: string, value: 
 
 export class GameHost {
   games = new Map<string, GameState>();
+  undercoverGames = new Map<string, UState>();
+  private lastKind = new Map<string, 'werewolf' | 'undercover'>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private names = new Map<string, string>();
   private dms = new Map<string, string>(); // user → 私訊頻道
@@ -121,13 +194,47 @@ export class GameHost {
     return this.queue;
   }
 
+  // 頻道裡正在進行（還沒結束）的是哪款遊戲
+  private active(channel: string): 'werewolf' | 'undercover' | null {
+    const w = this.games.get(channel);
+    if (w && w.phase !== 'ended') return 'werewolf';
+    const u = this.undercoverGames.get(channel);
+    if (u && u.phase !== 'ended') return 'undercover';
+    return null;
+  }
+
+  private reply(channel: string, user: string, text: string): Promise<void> {
+    return this.deliver(channel, [{ type: 'ephemeral', to: user, text }]);
+  }
+
+  // `/game <遊戲> <子指令>`
+  game(channel: string, user: string, userName: string, text: string): Promise<void> {
+    this.names.set(user, userName);
+    const [g, ...rest] = text.trim().split(/\s+/);
+    const restText = rest.join(' ');
+    if (g === 'werewolf') return this.command(channel, user, userName, restText);
+    if (g === 'undercover') return this.undercover(channel, user, restText);
+    if (g === 'stats') return this.showStats(channel, user, restText);
+    return this.reply(channel, user, GAME_LIST);
+  }
+
+  // `/werewolf <子指令>`（也是 `/game werewolf <子指令>`）
   command(channel: string, user: string, userName: string, text: string): Promise<void> {
     this.names.set(user, userName);
     const [sub, ...args] = text.trim().split(/\s+/);
     if (sub === 'stats') return this.showStats(channel, user, args.join(' '));
     const action = parseCommand(text, user, channel);
-    if (!action) return this.deliver(channel, [{ type: 'ephemeral', to: user, text: HELP }]);
+    if (!action) return this.reply(channel, user, HELP);
+    if (this.active(channel) === 'undercover') return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
     return this.dispatch(channel, action);
+  }
+
+  // `/game undercover <子指令>`
+  private undercover(channel: string, user: string, text: string): Promise<void> {
+    const action = parseUndercoverCommand(text, user, channel);
+    if (!action) return this.reply(channel, user, UNDERCOVER_HELP);
+    if (this.active(channel) === 'werewolf') return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    return this.dispatchUndercover(channel, action);
   }
 
   button(actionId: string, value: string, user: string, userName: string): Promise<void> {
@@ -135,6 +242,10 @@ export class GameHost {
     const kind = actionId.split(':')[1];
     const sep = value.indexOf('|');
     const channel = value.slice(0, sep);
+    if (this.lastKind.get(channel) === 'undercover') {
+      const u = undercoverButton(kind, value.slice(sep + 1), user, channel);
+      return u ? this.dispatchUndercover(channel, u) : Promise.resolve();
+    }
     const action = buttonAction(kind, value.slice(sep + 1), user, channel);
     return action ? this.dispatch(channel, action) : Promise.resolve();
   }
@@ -150,21 +261,33 @@ export class GameHost {
 
   // 頻道裡的一般訊息：只在有遊戲進行時交給 engine，engine 只讀不回應
   chat(channel: string, user: string, text: string): Promise<void> {
-    if (!this.games.has(channel)) return Promise.resolve();
+    if (this.active(channel) !== 'werewolf') return Promise.resolve();
     return this.dispatch(channel, { type: 'chat', user, text });
   }
 
   dispatch(channel: string, action: Action): Promise<void> {
     const { state, events } = applyAction(this.games.get(channel), action, this.rng);
-    if (state) this.games.set(channel, state);
+    if (state) {
+      this.games.set(channel, state);
+      this.lastKind.set(channel, 'werewolf');
+    }
     return this.deliver(channel, events);
   }
 
+  dispatchUndercover(channel: string, action: UAction): Promise<void> {
+    const { state, events } = applyUndercover(this.undercoverGames.get(channel), action, this.rng);
+    if (state) {
+      this.undercoverGames.set(channel, state);
+      this.lastKind.set(channel, 'undercover');
+    }
+    return this.deliver(channel, events, 'undercover');
+  }
+
   // 依序送出，避免同一局的訊息順序錯亂
-  private deliver(channel: string, events: GameEvent[]): Promise<void> {
+  private deliver(channel: string, events: GameEvent[], kind: 'werewolf' | 'undercover' = 'werewolf'): Promise<void> {
     this.queue = this.queue
       .then(async () => {
-        for (const e of events) await this.send(channel, e);
+        for (const e of events) await this.send(channel, e, kind);
       })
       .catch((err) => console.error('[werewolf] Slack API error', err));
     return this.queue;
@@ -201,14 +324,17 @@ export class GameHost {
       .join(' ');
   }
 
-  private async send(channel: string, e: GameEvent) {
+  private async send(channel: string, e: GameEvent, kind: 'werewolf' | 'undercover') {
     const chat = this.client.chat;
     switch (e.type) {
       case 'gameRecord':
         this.stats?.record(channel, e.winner, e.players);
         return;
       case 'startTimer':
-        this.setTimer(() => void this.dispatch(channel, { type: 'timeout', id: e.id }), e.ms);
+        this.setTimer(() => {
+          const timeout = { type: 'timeout' as const, id: e.id };
+          void (kind === 'undercover' ? this.dispatchUndercover(channel, timeout) : this.dispatch(channel, timeout));
+        }, e.ms);
         return;
       case 'dm':
         if (isBot(e.to)) return;
@@ -251,7 +377,7 @@ export class GameHost {
         await chat.postEphemeral({ channel, user: e.to, text: e.text });
         return;
       case 'lobby': {
-        const text = `狼人殺房間（房主 ${mention(e.host)}）\n玩家（${e.players.length}/${MAX_PLAYERS}）：${e.players.map(mention).join(' ')}`;
+        const text = `${e.title ?? '狼人殺'}房間（房主 ${mention(e.host)}）\n玩家（${e.players.length}/${MAX_PLAYERS}）：${e.players.map(mention).join(' ')}`;
         const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text } }];
         if (e.open) {
           const elements = [

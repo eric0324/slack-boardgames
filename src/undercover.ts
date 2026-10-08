@@ -1,0 +1,505 @@
+// 誰是臥底遊戲引擎：純邏輯，不碰任何 I/O。介面和狼人殺一樣：applyUndercover(state, action, rng) → { state, events }。
+// events 沿用狼人殺的 GameEvent，adapter 的 send() 可以共用。
+import { randomBotName } from './botLines.js';
+import { isBot, MAX_PLAYERS, mention, type GameEvent, type Rng } from './engine.js';
+import { BLANK_LINES, WORD_PAIRS } from './undercoverWords.js';
+
+export const MIN_UNDERCOVER_PLAYERS = 4;
+export const SPEECH_MS = 40_000;
+export const VOTE_MS = 60_000;
+export const GUESS_MS = 60_000;
+const TITLE = '誰是臥底';
+
+export type UPhase = 'lobby' | 'speech' | 'vote' | 'pkSpeech' | 'pkVote' | 'guess' | 'ended';
+export type URole = 'civilian' | 'undercover' | 'blank';
+
+export const ROLE_NAME_U: Record<URole, string> = { civilian: '平民', undercover: '臥底', blank: '白板' };
+
+// 人數 → 各身分數量
+export const UNDERCOVER_TABLE: Record<number, Record<URole, number>> = {
+  4: { civilian: 3, undercover: 1, blank: 0 },
+  5: { civilian: 4, undercover: 1, blank: 0 },
+  6: { civilian: 4, undercover: 1, blank: 1 },
+  7: { civilian: 5, undercover: 1, blank: 1 },
+  8: { civilian: 6, undercover: 1, blank: 1 },
+  9: { civilian: 6, undercover: 2, blank: 1 },
+  10: { civilian: 7, undercover: 2, blank: 1 },
+  11: { civilian: 8, undercover: 2, blank: 1 },
+  12: { civilian: 9, undercover: 2, blank: 1 },
+};
+
+export interface UPlayer {
+  id: string;
+  alive: boolean;
+  role?: URole;
+  word?: string;
+}
+
+export interface UState {
+  game: 'undercover';
+  channel: string;
+  host: string;
+  phase: UPhase;
+  players: UPlayer[];
+  timerSeq: number;
+  timers: { phase?: number };
+  words?: { civilian: string; undercover: string };
+  round: number;
+  speakers: string[]; // 還沒輪到的描述者
+  speaker?: string;
+  votes: Record<string, string>;
+  candidates: string[];
+  voters: string[];
+  guesser?: string; // 正在猜詞的白板
+  usedHints: Record<string, string[]>; // bot 這一局已經說過的描述句
+  winner?: 'civilian' | 'undercover';
+}
+
+export type UAction =
+  | { type: 'new'; user: string; channel: string }
+  | { type: 'rematch'; user: string; channel: string }
+  | { type: 'join'; user: string }
+  | { type: 'leave'; user: string }
+  | { type: 'start'; user: string }
+  | { type: 'cancel'; user: string }
+  | { type: 'addBot'; user: string; count: number }
+  | { type: 'removeBot'; user: string; count: number }
+  | { type: 'endSpeech'; user: string }
+  | { type: 'skipSpeaker'; user: string }
+  | { type: 'endDiscussion'; user: string }
+  | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
+  | { type: 'guess'; user: string; word: string }
+  | { type: 'timeout'; id: number };
+
+interface Result {
+  state: UState;
+  events: GameEvent[];
+}
+
+interface Ctx {
+  s: UState;
+  events: GameEvent[];
+  rng: Rng;
+}
+
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 發牌：不洗牌時的順序是臥底、白板、平民
+function deal(c: Ctx) {
+  const s = c.s;
+  const table = UNDERCOVER_TABLE[s.players.length];
+  const roles = shuffle(
+    (['undercover', 'blank', 'civilian'] as URole[]).flatMap((r) => Array<URole>(table[r]).fill(r)),
+    c.rng,
+  );
+  const pair = WORD_PAIRS[Math.floor(c.rng() * WORD_PAIRS.length)];
+  const [civilian, undercover] = c.rng() < 0.5 ? [pair.a.word, pair.b.word] : [pair.b.word, pair.a.word];
+  s.words = { civilian, undercover };
+  s.players.forEach((p, i) => {
+    p.role = roles[i];
+    p.word = p.role === 'civilian' ? civilian : p.role === 'undercover' ? undercover : undefined;
+  });
+  const setup = (['civilian', 'undercover', 'blank'] as URole[])
+    .filter((r) => table[r])
+    .map((r) => `${table[r]} ${ROLE_NAME_U[r]}`)
+    .join('、');
+  c.events.push({
+    type: 'announce',
+    text: `🎲 誰是臥底開始！玩家：${s.players.map((p) => mention(p.id)).join(' ')}\n身分配置：${setup}\n每個人的詞已經用私訊傳給大家，請到和 bot 的私訊查看。`,
+    gif: 'start',
+  });
+  for (const p of s.players) {
+    const text = p.word
+      ? `你的詞是：${p.word}\n輪到你時，用一句話描述它，不要說得太明白。`
+      : '你是白板，沒有拿到詞。\n仔細聽別人的描述，假裝自己也有詞；被投出去時還有一次猜詞的機會。';
+    c.events.push({ type: 'dm', to: p.id, text });
+  }
+}
+
+const alive = (s: UState) => s.players.filter((p) => p.alive);
+
+function startTimer(c: Ctx, ms: number) {
+  const id = ++c.s.timerSeq;
+  c.s.timers = { phase: id };
+  c.events.push({ type: 'startTimer', id, ms });
+}
+
+// 每一輪：隨機起點，依加入順序輪流描述
+function startRound(c: Ctx) {
+  const s = c.s;
+  s.round += 1;
+  const living = alive(s).map((p) => p.id);
+  const first = Math.floor(c.rng() * living.length);
+  s.phase = 'speech';
+  s.speakers = [...living.slice(first), ...living.slice(0, first)];
+  c.events.push({ type: 'announce', text: `💬 第 ${s.round} 輪描述，順序：${s.speakers.map(mention).join(' → ')}` });
+  nextSpeaker(c);
+}
+
+function nextSpeaker(c: Ctx) {
+  const s = c.s;
+  s.timers = {};
+  for (let id = s.speakers.shift(); id; id = s.speakers.shift()) {
+    s.speaker = id;
+    if (isBot(id)) {
+      botDescribe(c, id);
+      continue;
+    }
+    c.events.push({
+      type: 'prompt',
+      kind: 'endSpeech',
+      audience: 'channel',
+      text: `🎤 輪到 ${mention(id)} 描述（${SPEECH_MS / 1000} 秒）`,
+      options: [{ value: id, label: '結束發言' }],
+    });
+    startTimer(c, SPEECH_MS);
+    return;
+  }
+  s.speaker = undefined;
+  if (s.phase === 'pkSpeech') {
+    const voters = alive(s).filter((p) => !s.candidates.includes(p.id)).map((p) => p.id);
+    openVote(c, 'pkVote', s.candidates, voters);
+    return;
+  }
+  startVote(c);
+}
+
+const pick = <T>(items: T[], rng: Rng): T => items[Math.floor(rng() * items.length)];
+const hintsOf = (word: string) => WORD_PAIRS.flatMap(({ a, b }) => [a, b]).find((w) => w.word === word)?.hints ?? [];
+
+// bot 描述：平民和臥底用自己詞的描述句（盡量不重複），白板用通用的模糊台詞
+function botDescribe(c: Ctx, id: string) {
+  const s = c.s;
+  const me = s.players.find((p) => p.id === id)!;
+  const pool = me.word ? hintsOf(me.word) : BLANK_LINES;
+  const used = (s.usedHints[id] ??= []);
+  const fresh = pool.filter((h) => !used.includes(h));
+  const line = pick(fresh.length ? fresh : pool, c.rng);
+  used.push(line);
+  c.events.push({ type: 'announce', text: `${mention(id)}：${line}` });
+}
+
+// 找出下一個輪到 bot 的行動：投票（不投自己、不棄票）或白板猜詞
+function nextBotAction(s: UState, rng: Rng): Exclude<UAction, { type: 'new' } | { type: 'rematch' }> | null {
+  if (s.phase === 'vote' || s.phase === 'pkVote') {
+    const voter = s.voters.find((v) => isBot(v) && !s.votes[v]);
+    if (voter) {
+      const choices = s.candidates.filter((id) => id !== voter);
+      return { type: 'dayVote', user: voter, target: choices.length ? pick(choices, rng) : 'abstain' };
+    }
+  }
+  if (s.phase === 'guess' && s.guesser && isBot(s.guesser)) {
+    const others = WORD_PAIRS.flatMap(({ a, b }) => [a.word, b.word]).filter((w) => w !== s.words!.civilian && w !== s.words!.undercover);
+    return { type: 'guess', user: s.guesser, word: pick([s.words!.civilian, s.words!.undercover, pick(others, rng)], rng) };
+  }
+  return null;
+}
+
+function runBots(c: Ctx) {
+  for (let i = 0; i < 1000; i++) {
+    const action = nextBotAction(c.s, c.rng);
+    if (!action || !handle(c, action)) return;
+  }
+}
+
+function startVote(c: Ctx) {
+  const ids = alive(c.s).map((p) => p.id);
+  openVote(c, 'vote', ids, ids);
+}
+
+function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters: string[]) {
+  const s = c.s;
+  s.phase = phase;
+  s.votes = {};
+  s.candidates = candidates;
+  s.voters = voters;
+  c.events.push({
+    type: 'prompt',
+    kind: phase === 'vote' ? 'dayVote' : 'pkVote',
+    audience: 'channel',
+    text: phase === 'vote' ? '🗳️ 請投票選出臥底。' : '⚔️ PK 投票：請在平票的玩家中選一位（PK 中的玩家不能投票）。',
+    options: [...candidates.map((id) => ({ value: id, label: id })), { value: 'abstain', label: '棄票' }],
+  });
+  startTimer(c, VOTE_MS);
+  if (!voters.length) endVote(c);
+}
+
+function endVote(c: Ctx) {
+  const s = c.s;
+  const lines = s.voters.map((v) => {
+    const t = s.votes[v] ?? 'abstain';
+    return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
+  });
+  c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
+  const tally = new Map<string, number>();
+  for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
+  const max = Math.max(0, ...tally.values());
+  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  if (top.length > 1 && s.phase === 'vote') {
+    startPk(c, top);
+    return;
+  }
+  if (top.length !== 1) {
+    c.events.push({ type: 'announce', text: '🗳️ 這一輪沒有人出局。' });
+    startRound(c);
+    return;
+  }
+  eliminate(c, top[0]);
+}
+
+function startPk(c: Ctx, tied: string[]) {
+  const s = c.s;
+  s.phase = 'pkSpeech';
+  s.candidates = tied;
+  s.speakers = s.players.map((p) => p.id).filter((id) => tied.includes(id));
+  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序再描述一次。`, gif: 'pk' });
+  nextSpeaker(c);
+}
+
+// 放逐：公開身分但不公開詞；白板還有一次猜詞機會
+function eliminate(c: Ctx, id: string) {
+  const s = c.s;
+  const p = s.players.find((x) => x.id === id)!;
+  p.alive = false;
+  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局，身分是${ROLE_NAME_U[p.role!]}。`, gif: 'exile' });
+  if (p.role === 'blank') {
+    s.phase = 'guess';
+    s.guesser = id;
+    c.events.push({
+      type: 'announce',
+      text: `🤔 白板有 ${GUESS_MS / 1000} 秒可以猜平民詞：輸入 \`/game undercover guess <詞>\`，猜中臥底陣營直接獲勝。`,
+    });
+    startTimer(c, GUESS_MS);
+    return;
+  }
+  continueGame(c);
+}
+
+const normalize = (word: string) => word.trim().toLowerCase();
+
+function finishGuess(c: Ctx, word: string | undefined) {
+  const s = c.s;
+  const guesser = s.guesser!;
+  s.guesser = undefined;
+  s.timers = {};
+  if (word !== undefined && normalize(word) === normalize(s.words!.civilian)) {
+    c.events.push({ type: 'announce', text: `🎯 ${mention(guesser)} 猜「${word.trim()}」，猜中了平民詞！` });
+    endGame(c, 'undercover');
+    return;
+  }
+  const text = word === undefined ? `${mention(guesser)} 沒有猜詞。` : `${mention(guesser)} 猜「${word.trim()}」，沒猜中。`;
+  c.events.push({ type: 'announce', text });
+  continueGame(c);
+}
+
+// 臥底陣營（臥底＋白板）全部出局 → 平民勝；臥底陣營 ≥ 平民 → 臥底陣營勝
+export function checkUndercoverWinner(players: UPlayer[]): 'civilian' | 'undercover' | null {
+  const living = players.filter((p) => p.alive);
+  const undercoverSide = living.filter((p) => p.role !== 'civilian').length;
+  if (undercoverSide === 0) return 'civilian';
+  if (undercoverSide >= living.length - undercoverSide) return 'undercover';
+  return null;
+}
+
+// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪
+function continueGame(c: Ctx) {
+  const winner = checkUndercoverWinner(c.s.players);
+  if (winner) endGame(c, winner);
+  else startRound(c);
+}
+
+function endGame(c: Ctx, winner: 'civilian' | 'undercover') {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  const title = winner === 'civilian' ? '🎉 遊戲結束，平民獲勝！' : '🕵️ 遊戲結束，臥底陣營獲勝！';
+  const roster = s.players
+    .map((p) => `${mention(p.id)}：${ROLE_NAME_U[p.role!]}${p.word ? `（${p.word}）` : ''}，${p.alive ? '存活' : '出局'}`)
+    .join('\n');
+  c.events.push(
+    {
+      type: 'announce',
+      text: `${title}\n平民詞：${s.words!.civilian}／臥底詞：${s.words!.undercover}\n${roster}`,
+      gif: winner === 'civilian' ? 'goodWin' : 'wolvesWin',
+    },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
+}
+
+const isSpeaking = (s: UState) => s.phase === 'speech' || s.phase === 'pkSpeech';
+
+const lobbyEvent = (s: UState): GameEvent => ({
+  type: 'lobby',
+  title: TITLE,
+  host: s.host,
+  players: s.players.map((p) => p.id),
+  open: s.phase === 'lobby',
+});
+
+const reply = (c: Ctx, to: string, text: string) => {
+  c.events.push({ type: 'ephemeral', to, text });
+  return false;
+};
+
+function handle(c: Ctx, action: Exclude<UAction, { type: 'new' } | { type: 'rematch' }>): boolean {
+  const s = c.s;
+  switch (action.type) {
+    case 'join': {
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
+      if (s.players.some((p) => p.id === action.user)) return reply(c, action.user, '你已經在房間裡了。');
+      if (s.players.length >= MAX_PLAYERS) return reply(c, action.user, '房間已滿。');
+      s.players.push({ id: action.user, alive: true });
+      c.events.push(lobbyEvent(s));
+      return true;
+    }
+    case 'leave': {
+      if (!s.players.some((p) => p.id === action.user)) return false;
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了，不能離開。');
+      if (action.user === s.host) {
+        s.phase = 'ended';
+        c.events.push(lobbyEvent(s), { type: 'announce', text: '🛑 房主離開，遊戲已取消。' });
+        return true;
+      }
+      s.players = s.players.filter((p) => p.id !== action.user);
+      c.events.push(lobbyEvent(s));
+      return true;
+    }
+    case 'addBot': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以加入 bot。');
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
+      const room = MAX_PLAYERS - s.players.length;
+      const bots = s.players.filter((p) => isBot(p.id)).length;
+      const taken = new Set(s.players.filter((p) => isBot(p.id)).map((p) => p.id.split(':')[2]));
+      for (let i = 1; i <= Math.min(action.count, room); i++) {
+        const name = randomBotName(c.rng, taken);
+        taken.add(name);
+        s.players.push({ id: `bot:${bots + i}:${name}`, alive: true });
+      }
+      if (room > 0) c.events.push(lobbyEvent(s));
+      if (action.count > room) reply(c, action.user, '房間已滿。');
+      return room > 0;
+    }
+    case 'removeBot': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以移除 bot。');
+      if (s.phase !== 'lobby') return reply(c, action.user, '遊戲已經開始了。');
+      const bots = s.players.filter((p) => isBot(p.id));
+      if (!bots.length) return reply(c, action.user, '房間裡沒有 bot。');
+      const removed = new Set(bots.slice(-action.count).map((p) => p.id));
+      s.players = s.players.filter((p) => !removed.has(p.id));
+      c.events.push(lobbyEvent(s));
+      return true;
+    }
+    case 'start': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以開始遊戲。');
+      if (s.phase !== 'lobby') return false;
+      const n = s.players.length;
+      if (n < MIN_UNDERCOVER_PLAYERS) {
+        return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_UNDERCOVER_PLAYERS} 人才能開始。`);
+      }
+      c.events.push(lobbyEvent({ ...s, phase: 'speech' }));
+      deal(c);
+      startRound(c);
+      return true;
+    }
+    case 'cancel': {
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以取消遊戲。');
+      s.phase = 'ended';
+      s.timers = {};
+      c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
+      return true;
+    }
+    case 'endSpeech': {
+      if (!isSpeaking(s)) return false;
+      if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'skipSpeaker': {
+      if (!isSpeaking(s)) return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過發言者。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'endDiscussion': {
+      if (s.phase !== 'speech') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以直接進入投票。');
+      startVote(c);
+      return true;
+    }
+    case 'dayVote': {
+      if (s.phase !== 'vote' && s.phase !== 'pkVote') return false;
+      const voter = s.players.find((p) => p.id === action.user);
+      if (!voter) return false;
+      if (!voter.alive) return reply(c, action.user, '你已經出局，不能投票。');
+      if (!s.voters.includes(action.user)) return reply(c, action.user, 'PK 中的玩家不能投票。');
+      if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
+      s.votes[action.user] = action.target;
+      const choice = action.target === 'abstain' ? '你選擇棄票。' : `你投給了 ${mention(action.target)}。`;
+      c.events.push({ type: 'ephemeral', to: action.user, text: choice });
+      if (s.voters.every((v) => s.votes[v])) endVote(c);
+      return true;
+    }
+    case 'guess': {
+      if (s.phase !== 'guess' || action.user !== s.guesser) return reply(c, action.user, '現在不能猜詞。');
+      finishGuess(c, action.word);
+      return true;
+    }
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      if (isSpeaking(s)) nextSpeaker(c);
+      else if (s.phase === 'vote' || s.phase === 'pkVote') endVote(c);
+      else if (s.phase === 'guess') finishGuess(c, undefined);
+      else return false;
+      return true;
+    }
+  }
+}
+
+export function applyUndercover(state: UState | undefined, action: UAction, rng: Rng): Result {
+  const busy = (user: string): Result => ({ state: state!, events: [{ type: 'ephemeral', to: user, text: '這個頻道已經有遊戲了。' }] });
+  if (action.type === 'new') {
+    if (state && state.phase !== 'ended') return busy(action.user);
+    return createLobby(state, action.user, action.channel);
+  }
+  if (action.type === 'rematch') {
+    if (!state) return { state: state!, events: [] };
+    if (state.phase !== 'ended') return busy(action.user);
+    if (!state.winner) return { state, events: [] };
+    if (isBot(action.user) || !state.players.some((p) => p.id === action.user)) {
+      return { state, events: [{ type: 'ephemeral', to: action.user, text: '只有上一局的玩家可以開新的一局。' }] };
+    }
+    return createLobby(state, action.user, action.channel);
+  }
+  if (!state || state.phase === 'ended') return { state: state!, events: [] };
+  const c: Ctx = { s: structuredClone(state), events: [], rng };
+  const changed = handle(c, action);
+  if (changed) runBots(c);
+  return { state: changed ? c.s : state, events: c.events };
+}
+
+function createLobby(prev: UState | undefined, host: string, channel: string): Result {
+  const created: UState = {
+    game: 'undercover',
+    channel,
+    host,
+    phase: 'lobby',
+    players: [{ id: host, alive: true }],
+    timerSeq: prev?.timerSeq ?? 0,
+    timers: {},
+    round: 0,
+    usedHints: {},
+    speakers: [],
+    votes: {},
+    candidates: [],
+    voters: [],
+  };
+  return { state: created, events: [lobbyEvent(created)] };
+}

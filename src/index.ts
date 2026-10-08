@@ -21,6 +21,11 @@ app.command('/werewolf', async ({ command, ack }) => {
   await host.command(command.channel_id, command.user_id, command.user_name, command.text);
 });
 
+app.command('/game', async ({ command, ack }) => {
+  await ack();
+  await host.game(command.channel_id, command.user_id, command.user_name, command.text);
+});
+
 app.action<BlockAction<ButtonAction>>(/^ww:/, async ({ action, body, ack }) => {
   await ack();
   await host.button(action.action_id, action.value ?? '', body.user.id, body.user.username);
