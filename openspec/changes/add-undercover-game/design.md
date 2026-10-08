@@ -25,7 +25,9 @@
 
 ### 2. adapter 記錄每個頻道在玩哪一款遊戲
 
-`GameHost.games` 從 `Map<channel, GameState>` 改成記錄 `{ kind: 'werewolf' | 'undercover', state }`。指令、按鈕、計時的 timeout 都依照 `kind` 交給對應的 engine。按鈕的 action_id 維持 `ww:<kind>:<index>`，共用的按鈕種類（join、leave、start、endSpeech、dayVote、pkVote、rematch）依頻道目前的遊戲決定交給誰。
+兩款遊戲各用一個 Map 存狀態（`games` 給狼人殺、`undercoverGames` 給誰是臥底），另外用 `lastKind` 記錄每個頻道最近一局是哪款遊戲。「一個頻道只能一局」由 `active(channel)` 檢查兩個 Map 裡有沒有還沒結束的遊戲。按鈕的 action_id 維持 `ww:<kind>:<index>`，共用的按鈕種類（join、leave、start、endSpeech、dayVote、pkVote、rematch）依 `lastKind` 決定交給誰；計時器在設定時就記住是哪款遊戲的。
+
+原本打算改成單一 Map 記錄 `{ kind, state }`，但那樣狼人殺既有的 Slack 測試（直接讀 `host.games`）全部要改，所以改用兩個 Map，行為相同。
 
 ### 3. `/game` 指令解析
 

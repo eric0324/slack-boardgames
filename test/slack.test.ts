@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -466,5 +466,101 @@ describe('Slack：讀取頻道訊息', () => {
     await host.chat('C9', 'U1', '我是預言家');
     expect(calls).toEqual([]);
     expect(host.games.has('C9')).toBe(false);
+  });
+});
+
+describe('game-commands: /game 指令與多款遊戲', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game 列出可以玩的遊戲', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    const text = lastEph(calls).text;
+    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new']) expect(text).toContain(s);
+  });
+
+  it('/game werewolf new 和 /werewolf new 效果相同', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'werewolf new');
+    expect(host.games.get('C1')).toMatchObject({ phase: 'lobby', host: 'U1' });
+    expect(calls.find((c) => c.method === 'chat.postMessage')!.args.text).toContain('狼人殺房間');
+  });
+
+  it('/game undercover new 開誰是臥底的房間，按鈕加入會更新公告', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'undercover new');
+    expect(calls.at(-1)!.args.text).toContain('誰是臥底房間');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.undercoverGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+    expect(calls.at(-1)).toMatchObject({ method: 'chat.update', args: { text: expect.stringContaining('<@U2>') } });
+  });
+
+  it('/game undercover help 列出誰是臥底的指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'undercover help');
+    const text = lastEph(calls).text;
+    for (const s of ['new', 'addbot', 'removebot', 'start', 'next', 'vote', 'cancel', 'guess']) expect(text).toContain(`/game undercover ${s}`);
+  });
+
+  it('一個頻道同時只有一局：狼人殺進行中不能開誰是臥底，反過來也一樣', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'werewolf new');
+    await host.game('C1', 'U2', 'bob', 'undercover new');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    expect(host.undercoverGames.has('C1')).toBe(false);
+
+    const other = setup();
+    await other.host.game('C2', 'U1', 'alice', 'undercover new');
+    await other.host.command('C2', 'U2', 'bob', 'new');
+    expect(lastEph(other.calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+  });
+
+  it('遊戲結束後可以換一款遊戲', async () => {
+    const { host } = setup();
+    await host.game('C1', 'U1', 'alice', 'werewolf new');
+    await host.game('C1', 'U1', 'alice', 'werewolf cancel');
+    await host.game('C1', 'U1', 'alice', 'undercover new');
+    expect(host.undercoverGames.get('C1')).toMatchObject({ phase: 'lobby' });
+  });
+
+  it('對誰是臥底使用狼人殺的指令：只讓輸入的人看到不適用', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'undercover new');
+    await host.game('C1', 'U1', 'alice', 'werewolf start');
+    expect(lastEph(calls)).toMatchObject({ user: 'U1', text: '這個指令不適用於目前的遊戲。' });
+    await host.command('C1', 'U1', 'alice', 'start');
+    expect(lastEph(calls)).toMatchObject({ text: '這個指令不適用於目前的遊戲。' });
+  });
+
+  it('誰是臥底的開始按鈕、私訊發詞和計時都交給誰是臥底', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'undercover new');
+    for (const u of ['U2', 'U3', 'U4']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    const s = host.undercoverGames.get('C1')!;
+    expect(s.phase).toBe('speech');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && String(c.args.text).includes('你的詞是：'))).toBe(true);
+    const speaker = s.speaker;
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.undercoverGames.get('C1')!.speaker).not.toBe(speaker);
+  });
+
+  it('白板用 /game undercover guess 猜詞', () => {
+    expect(parseUndercoverCommand('guess  牛奶 ', 'U1', 'C1')).toEqual({ type: 'guess', user: 'U1', word: '牛奶' });
+    expect(parseUndercoverCommand('addbot 3', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 3 });
+    expect(parseUndercoverCommand('vote', 'U1', 'C1')).toEqual({ type: 'endDiscussion', user: 'U1' });
+    expect(parseUndercoverCommand('dance', 'U1', 'C1')).toBeNull();
+  });
+
+  it('/game stats 查詢戰績', async () => {
+    const { client, calls } = fakeClient();
+    const stats = new StatsStore(':memory:');
+    stats.record('C1', 'good', [{ id: 'U1', role: 'seer' }]);
+    const host = new GameHost(client, { stats, setTimer: () => {} });
+    await host.game('C1', 'U1', 'alice', 'stats');
+    expect(lastEph(calls).text).toContain('總計：1 場 1 勝');
   });
 });

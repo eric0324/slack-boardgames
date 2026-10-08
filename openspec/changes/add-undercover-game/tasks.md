@@ -27,8 +27,8 @@
 
 ## 6. Slack adapter 與 /game
 
-- [ ] 6.1 `GameHost` 記錄每個頻道的遊戲種類，指令、按鈕、計時依種類交給對應的 engine；一個頻道只能一局（不分遊戲）；確認 game-commands「一個頻道同時只有一局」「指令和按鈕交給正確的遊戲」的 scenarios 測試通過，狼人殺既有測試維持通過
-- [ ] 6.2 `/game` 指令解析、遊戲清單與各遊戲的使用說明、`/werewolf` 捷徑；確認 game-commands「/game 指令」「遊戲清單與使用說明」的 scenarios 測試通過
+- [x] 6.1 `GameHost` 記錄每個頻道的遊戲種類，指令、按鈕、計時依種類交給對應的 engine；一個頻道只能一局（不分遊戲）；確認 game-commands「一個頻道同時只有一局」「指令和按鈕交給正確的遊戲」的 scenarios 測試通過，狼人殺既有測試維持通過
+- [x] 6.2 `/game` 指令解析、遊戲清單與各遊戲的使用說明、`/werewolf` 捷徑；確認 game-commands「/game 指令」「遊戲清單與使用說明」的 scenarios 測試通過
 - [ ] 6.3 manifest 新增 `/game` slash command，更新 README、wiki（首頁遊戲表格、「誰是臥底」入口頁、規則頁、指令頁、側邊欄）
 
 ## 7. 整合驗證
