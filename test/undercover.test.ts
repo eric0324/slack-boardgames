@@ -142,3 +142,45 @@ describe('undercover/setup: 私訊發詞', () => {
     }
   });
 });
+
+const announces = (events: GameEvent[]) =>
+  events.filter((e) => e.type === 'announce').map((e) => (e as { text: string }).text);
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const lastTimer = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer').at(-1) as { id: number; ms: number };
+
+// 4 人局（p1 臥底、p2~p4 平民），rng 固定時第一輪從最後一位 p4 開始：p4 → p1 → p2 → p3
+describe('undercover/rounds: 輪流描述', () => {
+  it('公告描述順序，輪到第一位描述 40 秒', () => {
+    const { state, events } = startedU(4);
+    expect(state).toMatchObject({ phase: 'speech', speaker: 'p4' });
+    expect(announces(events)).toContainEqual(expect.stringContaining('<@p4> → <@p1> → <@p2> → <@p3>'));
+    expect(prompts(events, 'endSpeech').at(-1)).toMatchObject({ text: expect.stringContaining('輪到 <@p4> 描述（40 秒）') });
+    expect(lastTimer(events).ms).toBe(40_000);
+  });
+
+  it('時間到換下一位', () => {
+    const { state, events } = startedU(4);
+    expect(run([{ type: 'timeout', id: lastTimer(events).id }], state).state.speaker).toBe('p1');
+  });
+
+  it('發言者提前結束；不是發言者按結束發言會被拒絕', () => {
+    const { state } = startedU(4);
+    expect(run([{ type: 'endSpeech', user: 'p4' }], state).state.speaker).toBe('p1');
+    const denied = run([{ type: 'endSpeech', user: 'p2' }], state);
+    expect(denied.state.speaker).toBe('p4');
+    expect(ephemeralTo(denied.events, 'p2')).toMatchObject({ text: expect.stringContaining('不是你的發言時間') });
+  });
+
+  it('房主可以跳過發言者，也可以直接進入投票', () => {
+    const { state } = startedU(4);
+    expect(run([{ type: 'skipSpeaker', user: 'p1' }], state).state.speaker).toBe('p1');
+    expect(run([{ type: 'endDiscussion', user: 'p1' }], state).state.phase).toBe('vote');
+  });
+
+  it('全部描述完直接進入投票', () => {
+    const { state } = startedU(4);
+    const done = run(['p4', 'p1', 'p2', 'p3'].map((user) => ({ type: 'endSpeech', user }) as UAction), state);
+    expect(done.state.phase).toBe('vote');
+  });
+});

@@ -5,9 +5,12 @@ import { isBot, MAX_PLAYERS, mention, type GameEvent, type Rng } from './engine.
 import { WORD_PAIRS } from './undercoverWords.js';
 
 export const MIN_UNDERCOVER_PLAYERS = 4;
+export const SPEECH_MS = 40_000;
+export const VOTE_MS = 60_000;
+export const GUESS_MS = 60_000;
 const TITLE = '誰是臥底';
 
-export type UPhase = 'lobby' | 'speech' | 'ended';
+export type UPhase = 'lobby' | 'speech' | 'vote' | 'pkSpeech' | 'pkVote' | 'guess' | 'ended';
 export type URole = 'civilian' | 'undercover' | 'blank';
 
 export const ROLE_NAME_U: Record<URole, string> = { civilian: '平民', undercover: '臥底', blank: '白板' };
@@ -41,6 +44,12 @@ export interface UState {
   timerSeq: number;
   timers: { phase?: number };
   words?: { civilian: string; undercover: string };
+  round: number;
+  speakers: string[]; // 還沒輪到的描述者
+  speaker?: string;
+  votes: Record<string, string>;
+  candidates: string[];
+  voters: string[];
 }
 
 export type UAction =
@@ -51,6 +60,9 @@ export type UAction =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
+  | { type: 'endSpeech'; user: string }
+  | { type: 'skipSpeaker'; user: string }
+  | { type: 'endDiscussion'; user: string }
   | { type: 'timeout'; id: number };
 
 interface Result {
@@ -104,6 +116,73 @@ function deal(c: Ctx) {
     c.events.push({ type: 'dm', to: p.id, text });
   }
 }
+
+const alive = (s: UState) => s.players.filter((p) => p.alive);
+
+function startTimer(c: Ctx, ms: number) {
+  const id = ++c.s.timerSeq;
+  c.s.timers = { phase: id };
+  c.events.push({ type: 'startTimer', id, ms });
+}
+
+// 每一輪：隨機起點，依加入順序輪流描述
+function startRound(c: Ctx) {
+  const s = c.s;
+  s.round += 1;
+  const living = alive(s).map((p) => p.id);
+  const first = Math.floor(c.rng() * living.length);
+  s.phase = 'speech';
+  s.speakers = [...living.slice(first), ...living.slice(0, first)];
+  c.events.push({ type: 'announce', text: `💬 第 ${s.round} 輪描述，順序：${s.speakers.map(mention).join(' → ')}` });
+  nextSpeaker(c);
+}
+
+function nextSpeaker(c: Ctx) {
+  const s = c.s;
+  s.timers = {};
+  for (let id = s.speakers.shift(); id; id = s.speakers.shift()) {
+    s.speaker = id;
+    if (isBot(id)) {
+      botDescribe(c, id);
+      continue;
+    }
+    c.events.push({
+      type: 'prompt',
+      kind: 'endSpeech',
+      audience: 'channel',
+      text: `🎤 輪到 ${mention(id)} 描述（${SPEECH_MS / 1000} 秒）`,
+      options: [{ value: id, label: '結束發言' }],
+    });
+    startTimer(c, SPEECH_MS);
+    return;
+  }
+  s.speaker = undefined;
+  startVote(c);
+}
+
+// 先放一句通用台詞，task 5.1 會改成依詞庫描述
+function botDescribe(c: Ctx, id: string) {
+  c.events.push({ type: 'announce', text: `${mention(id)}：……` });
+}
+
+function startVote(c: Ctx) {
+  const s = c.s;
+  const ids = alive(s).map((p) => p.id);
+  s.phase = 'vote';
+  s.votes = {};
+  s.candidates = ids;
+  s.voters = ids;
+  c.events.push({
+    type: 'prompt',
+    kind: 'dayVote',
+    audience: 'channel',
+    text: '🗳️ 請投票選出臥底。',
+    options: [...ids.map((id) => ({ value: id, label: id })), { value: 'abstain', label: '棄票' }],
+  });
+  startTimer(c, VOTE_MS);
+}
+
+const isSpeaking = (s: UState) => s.phase === 'speech' || s.phase === 'pkSpeech';
 
 const lobbyEvent = (s: UState): GameEvent => ({
   type: 'lobby',
@@ -173,9 +252,9 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
       if (n < MIN_UNDERCOVER_PLAYERS) {
         return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_UNDERCOVER_PLAYERS} 人才能開始。`);
       }
-      s.phase = 'speech';
-      c.events.push(lobbyEvent(s));
+      c.events.push(lobbyEvent({ ...s, phase: 'speech' }));
       deal(c);
+      startRound(c);
       return true;
     }
     case 'cancel': {
@@ -185,8 +264,30 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
-      return false;
+    case 'endSpeech': {
+      if (!isSpeaking(s)) return false;
+      if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'skipSpeaker': {
+      if (!isSpeaking(s)) return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過發言者。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'endDiscussion': {
+      if (s.phase !== 'speech') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以直接進入投票。');
+      startVote(c);
+      return true;
+    }
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      if (isSpeaking(s)) nextSpeaker(c);
+      else return false;
+      return true;
+    }
   }
 }
 
@@ -203,6 +304,11 @@ export function applyUndercover(state: UState | undefined, action: UAction, rng:
       players: [{ id: action.user, alive: true }],
       timerSeq: state?.timerSeq ?? 0,
       timers: {},
+      round: 0,
+      speakers: [],
+      votes: {},
+      candidates: [],
+      voters: [],
     };
     return { state: created, events: [lobbyEvent(created)] };
   }
