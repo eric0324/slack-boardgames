@@ -182,3 +182,74 @@ describe('codenames/turns: 隊長給提示', () => {
     expect(announces(after.events).join('\n')).toContain('輪到 🟥 紅隊');
   });
 });
+
+// 藍隊（p2 隊長、p4 隊員）給了提示「水果」2；字卡 0～8 藍、9～16 紅、17～23 中立、24 刺客
+const guessing = () => clue('p2', '水果', 2, started(4).state);
+const guess = (indexes: number[], s: CState, user = 'p4') =>
+  run(indexes.map((index) => ({ type: 'guess', user, index }) as CAction), s);
+
+describe('codenames/turns: 猜牌', () => {
+  it('給提示後貼出「結束猜牌」按鈕', () => {
+    const p = guessing().events.find((e) => e.type === 'prompt' && e.kind === 'endGuess') as Extract<GameEvent, { type: 'prompt' }>;
+    expect(p.options).toEqual([{ value: 'end', label: '結束猜牌' }]);
+  });
+
+  it('翻到自己隊的牌：公告、牌桌更新，可以繼續猜', () => {
+    const { state, events } = guess([0], guessing().state);
+    expect(state.cards[0].revealed).toBe(true);
+    expect(state).toMatchObject({ phase: 'guess', turn: 'blue', guessed: 1 });
+    expect(announces(events).join('\n')).toContain(`<@p4> 翻開「${state.cards[0].word}」：🟦 藍隊`);
+    const board = boards(events).at(-1)!;
+    expect(board.rows[0][0]).toEqual({ value: '0', label: `🟦${state.cards[0].word}`, style: 'primary' });
+    expect(board.rows[0][1].label).toBe(state.cards[1].word);
+  });
+
+  it('最多猜「數字＋1」張，猜滿就換對方', () => {
+    const two = guess([0, 1], guessing().state).state;
+    expect(two.phase).toBe('guess');
+    const { state } = guess([2], two);
+    expect(state).toMatchObject({ phase: 'clue', turn: 'red' });
+  });
+
+  it('翻到中立或對方的牌：回合結束，換對方', () => {
+    expect(guess([17], guessing().state).state).toMatchObject({ phase: 'clue', turn: 'red' });
+    const opp = guess([9], guessing().state);
+    expect(opp.state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(boards(opp.events).at(-1)!.rows[1][4]).toMatchObject({ label: `🟥${opp.state.cards[9].word}`, style: 'danger' });
+  });
+
+  it('隊長、對方隊伍、不在遊戲裡的人不能翻；已翻開的牌按了沒反應', () => {
+    const s = guessing().state;
+    for (const [user, hint] of [['p2', '隊長不能翻牌'], ['p3', '不是你們隊'], ['x', '不在這局']] as [string, string][]) {
+      const res = guess([0], s, user);
+      expect(res.state.cards[0].revealed).toBe(false);
+      expect(ephemeralTo(res.events, user)).toMatchObject({ text: expect.stringContaining(hint) });
+    }
+    const once = guess([0], s).state;
+    expect(guess([0], once).events).toEqual([]);
+  });
+
+  it('提示前不能翻牌', () => {
+    const res = guess([0], started(4).state);
+    expect(res.state.cards[0].revealed).toBe(false);
+    expect(ephemeralTo(res.events, 'p4')).toBeDefined();
+  });
+
+  it('猜過至少一張後可以結束猜牌', () => {
+    const s = guessing().state;
+    const early = run([{ type: 'endGuess', user: 'p4' }], s);
+    expect(early.state.phase).toBe('guess');
+    expect(ephemeralTo(early.events, 'p4')).toMatchObject({ text: expect.stringContaining('至少') });
+    const after = run([{ type: 'endGuess', user: 'p4' }], guess([0], s).state);
+    expect(after.state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(ephemeralTo(run([{ type: 'endGuess', user: 'p3' }], guess([0], s).state).events, 'p3')).toBeDefined();
+  });
+
+  it('猜牌 3 分鐘到了換對方；房主 next 直接結束目前隊伍的回合', () => {
+    const g = guessing();
+    expect(run([{ type: 'timeout', id: lastTimer(g.events).id }], g.state).state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(run([{ type: 'skipTurn', user: 'p1' }], g.state).state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(run([{ type: 'skipTurn', user: 'p1' }], started(4).state).state).toMatchObject({ phase: 'clue', turn: 'red' });
+    expect(ephemeralTo(run([{ type: 'skipTurn', user: 'p2' }], g.state).events, 'p2')).toBeDefined();
+  });
+});

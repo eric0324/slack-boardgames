@@ -53,6 +53,9 @@ export type CAction =
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'clue'; user: string; word: string; count: number }
+  | { type: 'guess'; user: string; index: number }
+  | { type: 'endGuess'; user: string }
+  | { type: 'skipTurn'; user: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<CAction, { type: 'new' }>;
@@ -190,7 +193,31 @@ function giveClue(c: Ctx, user: string, word: string, count: number): boolean {
     type: 'announce',
     text: `🕵️ ${TEAM_NAME[s.turn]}隊長：「${word}」${count}\n${TEAM_NAME[s.turn]}隊員請在牌桌上按字卡猜，最多 ${count + 1} 張（${GUESS_MS / 60_000} 分鐘）`,
   });
+  c.events.push({ type: 'prompt', kind: 'endGuess', audience: 'channel', text: '猜完了可以按「結束猜牌」', options: [{ value: 'end', label: '結束猜牌' }] });
   startTimer(c, GUESS_MS);
+  return true;
+}
+
+const COLOR_NAME: Record<CardColor, string> = { red: '🟥 紅隊', blue: '🟦 藍隊', neutral: '⬜ 中立', assassin: '💀 刺客' };
+
+// 翻牌：自己隊的牌可以繼續猜（最多提示數字＋1 張），其他顏色回合結束
+function guessCard(c: Ctx, user: string, index: number): boolean {
+  const s = c.s;
+  const card = s.cards[index];
+  if (!card || card.revealed) return false;
+  const p = s.players.find((x) => x.id === user);
+  if (!p) return reply(c, user, '你不在這局遊戲裡。');
+  if (s.phase !== 'guess') return reply(c, user, '現在不是猜牌的時間。');
+  if (p.spymaster) return reply(c, user, '隊長不能翻牌。');
+  if (p.team !== s.turn) return reply(c, user, '現在不是你們隊猜牌。');
+  card.revealed = true;
+  s.guessed++;
+  c.events.push({ type: 'announce', text: `${mention(user)} 翻開「${card.word}」：${COLOR_NAME[card.color]}` }, boardEvent(s));
+  if (card.color !== s.turn) endTurn(c);
+  else if (s.guessed >= s.clue!.count + 1) {
+    c.events.push({ type: 'announce', text: `✋ 已經猜滿 ${s.guessed} 張，換對方。` });
+    endTurn(c);
+  }
   return true;
 }
 
@@ -244,9 +271,28 @@ function handle(c: Ctx, action: GameAction): boolean {
     }
     case 'clue':
       return giveClue(c, action.user, action.word, action.count);
+    case 'guess':
+      return guessCard(c, action.user, action.index);
+    case 'endGuess': {
+      if (s.phase !== 'guess') return false;
+      const p = s.players.find((x) => x.id === action.user);
+      if (!p || p.spymaster || p.team !== s.turn) return reply(c, action.user, '只有目前猜牌隊伍的隊員可以結束猜牌。');
+      if (s.guessed === 0) return reply(c, action.user, '至少要猜一張才能結束猜牌。');
+      c.events.push({ type: 'announce', text: `🛑 ${TEAM_NAME[s.turn]}結束猜牌，換對方。` });
+      endTurn(c);
+      return true;
+    }
+    case 'skipTurn': {
+      if (s.phase !== 'clue' && s.phase !== 'guess') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過回合。');
+      c.events.push({ type: 'announce', text: `⏭️ 房主跳過了${TEAM_NAME[s.turn]}的回合。` });
+      endTurn(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
-      if (s.phase === 'clue') c.events.push({ type: 'announce', text: `⌛ ${TEAM_NAME[s.turn]}隊長沒有給提示，換對方。` });
+      const who = s.phase === 'clue' ? `${TEAM_NAME[s.turn]}隊長沒有給提示` : `${TEAM_NAME[s.turn]}猜牌時間到了`;
+      c.events.push({ type: 'announce', text: `⌛ ${who}，換對方。` });
       endTurn(c);
       return true;
     }
