@@ -200,6 +200,9 @@ function lobbyBlocks(channel: string) {
   ];
 }
 
+// 只有開房和再來一局會改變頻道目前的遊戲；舊遊戲留下的計時器之後才觸發時不能把按鈕搶回去
+const isCreation = (action: { type: string }) => action.type === 'new' || action.type === 'rematch';
+
 const NOT_APPLICABLE = '這個指令不適用於目前的遊戲。';
 const BUSY = '這個頻道已經有遊戲了。';
 
@@ -598,10 +601,11 @@ export class GameHost {
 
   dispatchGame(kind: OtherKind, channel: string, action: { type: string }): Promise<void> {
     const def = this.defs[kind];
-    const { state, events } = def.apply(def.states.get(channel), action, this.rng);
+    const prev = def.states.get(channel);
+    const { state, events } = def.apply(prev, action, this.rng);
     if (state) {
       def.states.set(channel, state);
-      this.lastKind.set(channel, kind);
+      if (state !== prev && isCreation(action)) this.lastKind.set(channel, kind);
     }
     return this.deliver(channel, events, kind);
   }
@@ -641,10 +645,11 @@ export class GameHost {
   }
 
   dispatch(channel: string, action: Action): Promise<void> {
-    const { state, events } = applyAction(this.games.get(channel), action, this.rng);
+    const prev = this.games.get(channel);
+    const { state, events } = applyAction(prev, action, this.rng);
     if (state) {
       this.games.set(channel, state);
-      this.lastKind.set(channel, 'werewolf');
+      if (state !== prev && isCreation(action)) this.lastKind.set(channel, 'werewolf');
     }
     return this.deliver(channel, events);
   }

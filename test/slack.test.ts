@@ -1036,3 +1036,37 @@ describe('game-commands: 訊息格式正確顯示', () => {
     expect(turn.args.text).toContain('喊數： `/game liarsdice bid <數量> <點數>` （');
   });
 });
+
+describe('game-commands: 換遊戲後按鈕仍交給新遊戲', () => {
+  it('取消誰是臥底後開吹牛骰，誰是臥底留下的計時器觸發後，加入按鈕仍然交給吹牛骰', async () => {
+    const { client } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'undercover new');
+    for (const u of ['U2', 'U3', 'U4']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    const stale = timers.at(-1)!;
+    await host.game('C1', 'U1', 'alice', 'undercover cancel');
+    await host.button('ww:lobbyOpen:5', 'C1|liarsdice', 'U1', 'alice');
+    stale.fn();
+    await host.idle();
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.liarsDiceGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+  });
+
+  it('狼人殺的計時器也一樣', async () => {
+    const { client } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.command('C1', 'U1', 'alice', 'new');
+    await host.command('C1', 'U1', 'alice', 'addbot 5');
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    const stale = timers.at(-1)!;
+    await host.command('C1', 'U1', 'alice', 'cancel');
+    await host.game('C1', 'U1', 'alice', 'coup new');
+    stale.fn();
+    await host.idle();
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.coupGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+  });
+});
