@@ -5,12 +5,13 @@ import { formatStats, type StatsStore } from './stats.js';
 import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applyCodenames, type CAction, type CState } from './codenames.js';
 import { applyCoup, type KAction, type KState } from './coup.js';
+import { applyHanabi, type Color, type HAction, type HState } from './hanabi.js';
 import { applyJustOne, type JAction, type JState } from './justone.js';
 import { applyLiarsDice, type LAction, type LState } from './liarsdice.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice' | 'justone' | 'coup';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice' | 'justone' | 'coup' | 'hanabi';
 type OtherKind = Exclude<Kind, 'werewolf'>;
 
 // 狼人殺以外的遊戲都用同一套方式接上 adapter：engine、指令解析、按鈕對應、說明
@@ -66,6 +67,7 @@ const GAME_LIST = [
   '• 🎲 *吹牛骰*（`liarsdice`）：2～8 人，開房 `/game liarsdice new`',
   '• 💡 *一字千金*（`justone`）：3～7 人（不支援 bot），開房 `/game justone new`',
   '• 👑 *政變*（`coup`）：3～6 人，開房 `/game coup new`',
+  '• 🎆 *花火*（`hanabi`）：2～5 人（不支援 bot），開房 `/game hanabi new`',
   '各遊戲的指令：`/game <遊戲代號> help`，例如 `/game liarsdice help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
@@ -150,6 +152,16 @@ const COUP_HELP = [
   '• `/game coup start`：開始遊戲，需要 3～6 人（房主）',
   '• `/game coup cancel`：取消遊戲（房主）',
   '行動、選目標、質疑、阻擋都用頻道按鈕；翻牌和大使交換用私訊按鈕',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const HANABI_HELP = [
+  '*花火指令*',
+  '• `/game hanabi new`：開房（任何人）',
+  '• `/game hanabi start`：開始遊戲，需要 2～5 位真人（房主）',
+  '• `/game hanabi hint @某人 <紅|黃|綠|藍|白|1～5>`：給提示（輪到你時，花 1 個提示標記）',
+  '• `/game hanabi cancel`：取消遊戲（房主）',
+  '看牌、出牌、棄牌都用頻道按鈕',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -289,6 +301,33 @@ function coupButton(kind: string, value: string, user: string, channel: string):
   }
 }
 
+const HANABI_COLORS: Record<string, Color> = { 紅: 'red', 黃: 'yellow', 綠: 'green', 藍: 'blue', 白: 'white' };
+
+// 花火的子指令：hint @某人 <顏色或數字>（開啟 should_escape 後 mention 是 <@U123> 或 <@U123|名字>）
+export function parseHanabiCommand(text: string, user: string, channel: string): HAction | null {
+  const [sub, ...rest] = text.trim().split(/\s+/);
+  if (sub === 'hint') {
+    const target = /^<@([A-Z0-9]+)(\|[^>]*)?>$/.exec(rest[0] ?? '')?.[1];
+    const value = rest[1] ?? '';
+    if (!target || rest.length !== 2) return null;
+    if (HANABI_COLORS[value]) return { type: 'hint', user, target, color: HANABI_COLORS[value] };
+    if (/^[1-5]$/.test(value)) return { type: 'hint', user, target, number: Number(value) };
+    return null;
+  }
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || !['new', 'start', 'cancel', 'addBot', 'removeBot'].includes(action.type)) return null;
+  return action as HAction;
+}
+
+function hanabiButton(kind: string, value: string, user: string, channel: string): HAction | null {
+  if (kind === 'join' || kind === 'leave' || kind === 'start') return { type: kind, user };
+  if (kind === 'rematch') return { type: 'rematch', user, channel };
+  if (kind !== 'hanabiTurn') return null;
+  if (value === 'peek') return { type: 'peek', user };
+  const [act, index] = value.split(':');
+  return act === 'play' || act === 'discard' ? { type: act, user, index: Number(index) } : null;
+}
+
 function codenamesButton(kind: string, value: string, user: string, channel: string): CAction | null {
   switch (kind) {
     case 'join':
@@ -415,6 +454,7 @@ export class GameHost {
   liarsDiceGames = new Map<string, LState>();
   justOneGames = new Map<string, JState>();
   coupGames = new Map<string, KState>();
+  hanabiGames = new Map<string, HState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private boardTs = new Map<string, string>(); // 機密代號的牌桌訊息
@@ -444,6 +484,7 @@ export class GameHost {
       liarsdice: { states: this.liarsDiceGames, apply: applyLiarsDice, parse: parseLiarsDiceCommand, button: liarsDiceButton, help: LIARSDICE_HELP },
       justone: { states: this.justOneGames, apply: applyJustOne, parse: parseJustOneCommand, button: justOneButton, help: JUSTONE_HELP },
       coup: { states: this.coupGames, apply: applyCoup, parse: parseCoupCommand, button: coupButton, help: COUP_HELP },
+      hanabi: { states: this.hanabiGames, apply: applyHanabi, parse: parseHanabiCommand, button: hanabiButton, help: HANABI_HELP },
     };
   }
 

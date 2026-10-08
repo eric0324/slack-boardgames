@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseJustOneCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseAvalonCommand, parseCodenamesCommand, parseCommand, parseHanabiCommand, parseJustOneCommand, parseLiarsDiceCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -916,5 +916,46 @@ describe('game-commands: 政變', () => {
     expect(host.coupGames.get('C1')!.phase).toBe('exchange');
     await host.button('ww:keepCard:0', 'C1|1', 'U3', 'U3');
     expect(host.coupGames.get('C1')!.phase).toBe('action');
+  });
+});
+
+describe('game-commands: 花火', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game 清單有花火；/game hanabi help 列出指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    for (const s of ['花火', 'hanabi', '2～5 人', '/game hanabi new']) expect(lastEph(calls).text).toContain(s);
+    await host.game('C1', 'U1', 'alice', 'hanabi help');
+    for (const s of ['new', 'start', 'hint', 'cancel']) expect(lastEph(calls).text).toContain(`/game hanabi ${s}`);
+  });
+
+  it('看牌、出牌、棄牌按鈕和提示指令、計時都交給花火', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'hanabi new');
+    expect(calls.at(-1)!.args.text).toContain('花火房間');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    await host.button('ww:hanabiTurn:0', 'C1|peek', 'U1', 'alice');
+    expect(lastEph(calls)).toMatchObject({ user: 'U1', text: expect.stringContaining('<@U2>：🟥3') });
+    await host.game('C1', 'U2', 'bob', 'hanabi hint <@U1|alice> 紅');
+    expect(host.hanabiGames.get('C1')).toMatchObject({ hints: 7, turn: 0 });
+    await host.button('ww:hanabiTurn:1', 'C1|play:0', 'U1', 'alice');
+    expect(host.hanabiGames.get('C1')!.fireworks.red).toBe(1);
+    await host.button('ww:hanabiTurn:6', 'C1|discard:0', 'U2', 'bob');
+    expect(host.hanabiGames.get('C1')!.hints).toBe(8);
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.hanabiGames.get('C1')!.turn).toBe(1);
+  });
+
+  it('提示指令解析：@某人 加上顏色或數字', () => {
+    expect(parseHanabiCommand('hint <@U2|bob> 紅', 'U1', 'C1')).toEqual({ type: 'hint', user: 'U1', target: 'U2', color: 'red' });
+    expect(parseHanabiCommand('hint <@U2> 3', 'U1', 'C1')).toEqual({ type: 'hint', user: 'U1', target: 'U2', number: 3 });
+    expect(parseHanabiCommand('hint <@U2> 紫', 'U1', 'C1')).toBeNull();
+    expect(parseHanabiCommand('hint bob 3', 'U1', 'C1')).toBeNull();
+    expect(parseHanabiCommand('addbot', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 1 });
   });
 });
