@@ -16,6 +16,9 @@ export const GIFS: Record<GifKey, string[]> = {
     '1STYRz8waCf63JiIt0',
     'KCNLqGdndJ6h2',
     '3ov9jUCYetT3GVwcy4',
+    'hsubjoiDroLg4AYyUO',
+    '5yYoECDolGySFHKZYl',
+    '0x57czOxquMF5108yi',
   ),
   // 月亮、狼嚎、晚安
   night: giphy(
@@ -28,6 +31,9 @@ export const GIFS: Record<GifKey, string[]> = {
     'DQzOKqLSkkZssCkFdQ',
     'RxJpkbjksbkas',
     '0mPp8Lz8kfBqxGFFW0',
+    'aN9GqoR7OD3nq',
+    '4G2yXkYq186T6',
+    'CIjXMxobcEnkI',
   ),
   // 抬棺舞、RIP、I'm dead
   dawnDeath: giphy(
@@ -38,6 +44,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'R5unorzb9UtmrAPpl7',
     '95ThFF7MokcdeoVqt8',
     'ze4Y13PeotDfqoQWza',
+    'QcJNocjpV4hS8YxLWb',
+    'hm0WyK3aO1MvhtR4DG',
+    'hVIP0gJdeowgd38Vh6',
+    'FkCcqcQSYAXsSrzfrF',
+    'cjKY0wWlPzLdC',
   ),
   // 鬆一口氣、早安
   dawnPeace: giphy(
@@ -49,6 +60,9 @@ export const GIFS: Record<GifKey, string[]> = {
     'kYNVwkyB3jkauFJrZA',
     'Cm9wKmKMUlRPvdoHgU',
     'ZX6RWer1T8rsgVTG1s',
+    'EDt1m8p5hqXG8',
+    'n5iPVLeA1fvb0IYU5W',
+    'BhyPiYtLJhIJVcTLLi',
   ),
   // 被踢出去、掰掰
   exile: giphy(
@@ -59,6 +73,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'PF4NopbRuZj8I',
     'COAg7vjpWW8Ja',
     'ZBVhKIDgts1eHYdT7u',
+    '8TpVGNvD85RsA7nCdq',
+    '4cJtZIbUX0ywOT3rdC',
+    'GBtVddS8zH7pUnaDSH',
+    'dta6q4Q8jrEzHtVCiL',
+    'dCqz0HYyau1lPIjZi1',
   ),
   // 反派邪笑
   wolfKingShot: giphy(
@@ -69,6 +88,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'PPi5c8l8WDY7if1L8z',
     'yhK9WRjy14w6MuEK9G',
     'iF6kSCNVO3ro82qIFD',
+    'WFqchK1fYg4MBgmWPk',
+    'ZvsIuK3ovaHoA',
+    'hkik4ac9sSqaY',
+    'hUtaohU1UdG7K',
+    'Qaoh3qmKzOFVK',
   ),
   // 對峙、瞪眼
   pk: giphy(
@@ -78,6 +102,12 @@ export const GIFS: Record<GifKey, string[]> = {
     'YetssBvnfv1sU6NcmF',
     '3oriO9zfxLJ2Xl9SmI',
     'lQVWAAJuwn64UtJ37X',
+    'LW4WzdJ8hTODLGbQYP',
+    '3rgXBLz90TvTudHrj2',
+    'dVcbui72w4Qp66P6Wq',
+    'L33OnjCuZ5b13v4Vy1',
+    'hxB3Fc2xHeHRTunwvD',
+    '2t9pvPezmIHxGvYW0L',
   ),
   // 決鬥成功：揮劍、抓到你了
   duelWin: giphy(
@@ -88,6 +118,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'YTQtFyserQgId2sPIX',
     'fBpfmQPXnywQwlRbSp',
     '48evvoYjwnSAfHZqpf',
+    'dLhoOYRmsJVOhKbyTK',
+    'DZHpoRY2KeXyocGlX6',
+    'AhM9s5lvgw78k',
+    '28ytp7YTFVSrxChfhT',
+    'oJuNtXD8HPn8E1IP4Z',
   ),
   // 決鬥失敗：糗、my bad
   duelLose: giphy(
@@ -98,6 +133,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'BsQAVgY6ksvIY',
     '10VJ2YDMoNEBl6',
     'dgBbmiMscKvHX6XoZD',
+    'YrBRYRDN4M5ryrNOND',
+    'xT0BKFyZt9MMx9xkpW',
+    'm6eF4vztkof3Ju350R',
+    'ZmM3OWeJ73016zKZ4x',
+    '3ohc1ffY03hnhRUyUU',
   ),
   // 慶祝
   goodWin: giphy(
@@ -108,6 +148,11 @@ export const GIFS: Record<GifKey, string[]> = {
     'ZyrsfSkAbJ0SRyT8Ek',
     'rhaIsgMSRHaUg',
     '55VwaRpeMC7DM6YdWS',
+    'K3RxMSrERT8iI',
+    'jbUspndg5yz8UfVs8R',
+    '9wcu6Tr1ecmxa',
+    'uTuLngvL9p0Xe',
+    'l4pTmPgIgWEzf86zu',
   ),
   // 邪惡的笑
   wolvesWin: giphy(
@@ -118,5 +163,106 @@ export const GIFS: Record<GifKey, string[]> = {
     'xl5QdxfNonh3q',
     'FLKUJnRt6cGBG102B0',
     'lY1F6BJjbRO3m',
+    'tMyCJmeXHBetq',
+    'O9VJpVAj1Tkaolso2C',
+    'EJIqwKKY30Dlu',
+  ),
+  // 猜對了：天才、mind blown
+  guessRight: giphy(
+    'evTqgQ8kjkef4u8vYF',
+    'Q54fw7cxrs9BzCkzQv',
+    '2yrdpdeTbSoxVWETWp',
+    'ALZ1PPM20REZ2',
+    'RceaglkWbFstnLxnO1',
+    'RLBHnS501YAS2yk3mo',
+    'SACoDGYTvVNhZYNb5a',
+    'QXJhYxcCaU1LJUHmU2',
+    'vDWRVg8ZsjNWB583HV',
+    'uUzyWtasBuVu9GUr1l',
+    'VFt7qR9jYXRBMZGaV5',
+  ),
+  // 猜錯了：錯誤音效、扶額、nope
+  guessWrong: giphy(
+    'XD4qHZpkyUFfq',
+    'spfi6nabVuq5y',
+    '7SyGkO0kQWCfnUC47Y',
+    'nR4L10XlJcSeQ',
+    'xT1R9TtHD4gvFTXRks',
+    'vwI4mYEHP8k0w',
+    '3xz2BLBOt13X9AgjEA',
+    'STfLOU6iRBRunMciZv',
+    '6Q2KA5ly49368',
+    'pD7YIQoUwgb9cnX3FJ',
+    'JWnXY237vWeX3zx64V',
+  ),
+  // 阿瓦隆隊伍通過：豎大拇指、出發
+  teamApproved: giphy(
+    'BYoRqTmcgzHcL9TCy1',
+    '5UAofAl6g5t1GL5nO8',
+    'qc0rwO6IO05CILvaQ5',
+    'diUKszNTUghVe',
+    'k2bbmbmvUo7gA',
+    '3kuSo744UIPJjcJUEn',
+    '9yJFbNYA0NiE6Agh14',
+    'bA9xD321z6YwTyPC5w',
+    'TG3y3b2Ws0gRXgSHoP',
+    'CvZuv5m5cKl8c',
+    'SVDvVbkl359Xwzl3V4',
+  ),
+  // 阿瓦隆隊伍被否決：搖頭、denied
+  teamRejected: giphy(
+    '12ClTeBg4yvkiI',
+    'LbfT5qdS9m1zy',
+    'effWk7THZRPVY4u1uS',
+    '10PBe77p6h1qzm',
+    'eabb0SQsYllO0DxAqF',
+    '3og0Iv2bqNQVZ3RWow',
+    'l3V0px8dfZmmfwize',
+    'VzEkVN1htVOeI',
+    'f94YUFXeqQAT35G28Y',
+    '6mgPWdxbF4v0yKLS79',
+    'RJxadIFbgLkXqppHVE',
+  ),
+  // 阿瓦隆任務成功：任務完成、擊掌
+  questSuccess: giphy(
+    'WKdPOVCG5LPaM',
+    'a0h7sAqON67nO',
+    'O3Xkipk2aCFu4v4uFV',
+    'XBlwFU4OJ0cgZVbNUl',
+    'xNBcChLQt7s9a',
+    'd9a75A50T9AvJr0taw',
+    'nXxOjZrbnbRxS',
+    '39hsA5NQKeaFXNgMav',
+    'AgrfqPt5AyiTm',
+    '5wWf7GW1AzV6pF3MaVW',
+    '6brH8dM3zeMyA',
+  ),
+  // 阿瓦隆任務失敗：爆炸、搞砸了
+  questFail: giphy(
+    'FSH4Ks5VNSESzcLYgo',
+    'Yl5aO3gdVfsQ0',
+    'W0QcFjfmxX4wHdmIt4',
+    'qCbxDK31NoH03SwomM',
+    'Uukdwg2OpsX8waXXgt',
+    '2zJmB2VWwTBAE0Qaai',
+    'li0dswKqIZNpm',
+    'PSxPL6jjDnpmM',
+    'wNR8ZhO4fObRu',
+    'QYj7oDH1z9jP0CaCy5',
+    'twdqaUs8mc2DBMW9QF',
+  ),
+  // 阿瓦隆進入刺殺：刺客、緊張
+  assassination: giphy(
+    '10muIrtgU0281O',
+    'Iw1NPgIIHZnu5ZTaeV',
+    'xT39DkkGBwez9AXHX2',
+    'N2XDKWQQrfSIvppANL',
+    'PWrTngRa9lpqtBeTt5',
+    'Ulrc0PwQy0K9la8dMx',
+    'XujzWKelSd5S',
+    'vCfllJlyM3Jv3SN84V',
+    'tC8H9clIfQqDm',
+    'OZ2IZEByiglW0',
+    '76dXlFZZEqNH2',
   ),
 };
