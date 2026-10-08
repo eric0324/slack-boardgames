@@ -27,6 +27,7 @@ export interface JState {
   guesser: number; // 猜詞的人在 players 裡的位置
   score: number;
   clues: Record<string, string>;
+  removed: string[]; // 這輪被刪掉的提示（回合結束時公開）
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -111,9 +112,30 @@ function giveClue(c: Ctx, user: string, word: string): boolean {
   return true;
 }
 
+const normalize = (text: string) => text.trim().toLowerCase();
+
+// 給提示結束：刪掉重複的和跟答案相同的提示，公開留下的提示
 function endClues(c: Ctx) {
   const s = c.s;
   s.phase = 'guess';
+  const entries = cluers(s)
+    .filter((id) => s.clues[id] !== undefined)
+    .map((id) => [id, s.clues[id]] as const);
+  const count = new Map<string, number>();
+  for (const [, w] of entries) count.set(normalize(w), (count.get(normalize(w)) ?? 0) + 1);
+  const ok = (w: string) => count.get(normalize(w)) === 1 && normalize(w) !== normalize(s.word!);
+  const kept = entries.filter(([, w]) => ok(w));
+  s.removed = entries.filter(([, w]) => !ok(w)).map(([id, w]) => `${mention(id)}「${w}」`);
+  const guesser = s.players[s.guesser].id;
+  const shown = kept.length ? kept.map(([id, w]) => `${mention(id)}「${w}」`).join('、') : '沒有留下任何提示 😱';
+  const removed = s.removed.length ? `\n（${s.removed.length} 個提示因為重複或和答案相同被刪掉）` : '';
+  c.events.push(
+    {
+      type: 'announce',
+      text: `💡 提示：${shown}${removed}\n${mention(guesser)} 請用 \`/game justone guess <詞>\` 猜一次，或按「跳過」（${GUESS_MS / 1000} 秒）`,
+    },
+    { type: 'prompt', kind: 'skipGuess', audience: 'channel', text: '沒把握的話可以跳過，只會丟掉這張牌', options: [{ value: guesser, label: '跳過' }] },
+  );
   startTimer(c, GUESS_MS);
 }
 
@@ -203,6 +225,7 @@ function createLobby(prev: JState | undefined, host: string, channel: string): R
     guesser: 0,
     score: 0,
     clues: {},
+    removed: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
