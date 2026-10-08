@@ -2,7 +2,10 @@
 import { applyAction, isBot, MAX_PLAYERS, mention, RULES_URL, type Action, type GameEvent, type GameState, type GifKey, type Rng } from './engine.js';
 import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
+import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
+
+type Kind = 'werewolf' | 'undercover' | 'spyfall';
 
 // 只列出用到的 WebClient 方法，測試時可以換成假的 client
 export interface SlackClient {
@@ -42,7 +45,8 @@ const GAME_LIST = [
   '*可以玩的遊戲*',
   '• 🐺 *狼人殺*（`werewolf`）：6～12 人，開房 `/game werewolf new`（或 `/werewolf new`）',
   '• 🕵️ *誰是臥底*（`undercover`）：4～12 人，開房 `/game undercover new`',
-  '各遊戲的指令：`/game werewolf help`、`/game undercover help`',
+  '• 📍 *間諜危機*（`spyfall`）：4～10 人，開房 `/game spyfall new`',
+  '各遊戲的指令：`/game werewolf help`、`/game undercover help`、`/game spyfall help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -56,6 +60,19 @@ const UNDERCOVER_HELP = [
   '• `/game undercover vote`：結束描述，直接投票（房主）',
   '• `/game undercover cancel`：取消遊戲（房主）',
   '• `/game undercover guess <詞>`：被投出去的白板猜平民詞（60 秒內）',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const SPYFALL_HELP = [
+  '*間諜危機指令*',
+  '• `/game spyfall new`：開房（任何人）',
+  '• `/game spyfall addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game spyfall removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game spyfall start`：開始遊戲，需要 4～10 人（房主）',
+  '• `/game spyfall next`：跳過目前卡住的提問或回答（房主）',
+  '• `/game spyfall vote`：結束提問，直接投票（房主）',
+  '• `/game spyfall cancel`：取消遊戲（房主）',
+  '• `/game spyfall guess <地點>`：間諜猜地點（提問期間一次，或被指控後 60 秒內）',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -96,6 +113,33 @@ function undercoverButton(kind: string, value: string, user: string, channel: st
     case 'start':
     case 'endSpeech':
       return { type: kind, user };
+    case 'dayVote':
+    case 'pkVote':
+      return { type: 'dayVote', user, target: value };
+    case 'rematch':
+      return { type: 'rematch', user, channel };
+    default:
+      return null;
+  }
+}
+
+// 間諜危機的子指令和誰是臥底一樣，只有 guess 猜的是地點
+export function parseSpyfallCommand(text: string, user: string, channel: string): SAction | null {
+  const action = parseUndercoverCommand(text, user, channel);
+  if (action?.type === 'guess') return { type: 'guess', user, location: action.word };
+  return action as SAction | null;
+}
+
+function spyfallButton(kind: string, value: string, user: string, channel: string): SAction | null {
+  switch (kind) {
+    case 'join':
+    case 'leave':
+    case 'start':
+    case 'endSpeech':
+    case 'endAnswer':
+      return { type: kind, user };
+    case 'askTarget':
+      return { type: 'askTarget', user, target: value };
     case 'dayVote':
     case 'pkVote':
       return { type: 'dayVote', user, target: value };
@@ -168,7 +212,8 @@ const button = (kind: string, i: number, label: string, channel: string, value: 
 export class GameHost {
   games = new Map<string, GameState>();
   undercoverGames = new Map<string, UState>();
-  private lastKind = new Map<string, 'werewolf' | 'undercover'>(); // 每個頻道最近一局是哪款遊戲
+  spyfallGames = new Map<string, SState>();
+  private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private names = new Map<string, string>();
   private dms = new Map<string, string>(); // user → 私訊頻道
@@ -195,12 +240,20 @@ export class GameHost {
   }
 
   // 頻道裡正在進行（還沒結束）的是哪款遊戲
-  private active(channel: string): 'werewolf' | 'undercover' | null {
+  private active(channel: string): Kind | null {
     const w = this.games.get(channel);
     if (w && w.phase !== 'ended') return 'werewolf';
     const u = this.undercoverGames.get(channel);
     if (u && u.phase !== 'ended') return 'undercover';
+    const sp = this.spyfallGames.get(channel);
+    if (sp && sp.phase !== 'ended') return 'spyfall';
     return null;
+  }
+
+  // 頻道裡有別款遊戲正在進行
+  private blocked(channel: string, kind: Kind): boolean {
+    const a = this.active(channel);
+    return a !== null && a !== kind;
   }
 
   private reply(channel: string, user: string, text: string): Promise<void> {
@@ -214,6 +267,7 @@ export class GameHost {
     const restText = rest.join(' ');
     if (g === 'werewolf') return this.command(channel, user, userName, restText);
     if (g === 'undercover') return this.undercover(channel, user, restText);
+    if (g === 'spyfall') return this.spyfall(channel, user, restText);
     if (g === 'stats') return this.showStats(channel, user, restText);
     return this.reply(channel, user, GAME_LIST);
   }
@@ -225,7 +279,7 @@ export class GameHost {
     if (sub === 'stats') return this.showStats(channel, user, args.join(' '));
     const action = parseCommand(text, user, channel);
     if (!action) return this.reply(channel, user, HELP);
-    if (this.active(channel) === 'undercover') return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    if (this.blocked(channel, 'werewolf')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
     return this.dispatch(channel, action);
   }
 
@@ -233,8 +287,16 @@ export class GameHost {
   private undercover(channel: string, user: string, text: string): Promise<void> {
     const action = parseUndercoverCommand(text, user, channel);
     if (!action) return this.reply(channel, user, UNDERCOVER_HELP);
-    if (this.active(channel) === 'werewolf') return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    if (this.blocked(channel, 'undercover')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
     return this.dispatchUndercover(channel, action);
+  }
+
+  // `/game spyfall <子指令>`
+  private spyfall(channel: string, user: string, text: string): Promise<void> {
+    const action = parseSpyfallCommand(text, user, channel);
+    if (!action) return this.reply(channel, user, SPYFALL_HELP);
+    if (this.blocked(channel, 'spyfall')) return this.reply(channel, user, action.type === 'new' ? BUSY : NOT_APPLICABLE);
+    return this.dispatchSpyfall(channel, action);
   }
 
   button(actionId: string, value: string, user: string, userName: string): Promise<void> {
@@ -245,6 +307,10 @@ export class GameHost {
     if (this.lastKind.get(channel) === 'undercover') {
       const u = undercoverButton(kind, value.slice(sep + 1), user, channel);
       return u ? this.dispatchUndercover(channel, u) : Promise.resolve();
+    }
+    if (this.lastKind.get(channel) === 'spyfall') {
+      const sp = spyfallButton(kind, value.slice(sep + 1), user, channel);
+      return sp ? this.dispatchSpyfall(channel, sp) : Promise.resolve();
     }
     const action = buttonAction(kind, value.slice(sep + 1), user, channel);
     return action ? this.dispatch(channel, action) : Promise.resolve();
@@ -283,8 +349,17 @@ export class GameHost {
     return this.deliver(channel, events, 'undercover');
   }
 
+  dispatchSpyfall(channel: string, action: SAction): Promise<void> {
+    const { state, events } = applySpyfall(this.spyfallGames.get(channel), action, this.rng);
+    if (state) {
+      this.spyfallGames.set(channel, state);
+      this.lastKind.set(channel, 'spyfall');
+    }
+    return this.deliver(channel, events, 'spyfall');
+  }
+
   // 依序送出，避免同一局的訊息順序錯亂
-  private deliver(channel: string, events: GameEvent[], kind: 'werewolf' | 'undercover' = 'werewolf'): Promise<void> {
+  private deliver(channel: string, events: GameEvent[], kind: Kind = 'werewolf'): Promise<void> {
     this.queue = this.queue
       .then(async () => {
         for (const e of events) await this.send(channel, e, kind);
@@ -324,7 +399,7 @@ export class GameHost {
       .join(' ');
   }
 
-  private async send(channel: string, e: GameEvent, kind: 'werewolf' | 'undercover') {
+  private async send(channel: string, e: GameEvent, kind: Kind) {
     const chat = this.client.chat;
     switch (e.type) {
       case 'gameRecord':
@@ -333,7 +408,9 @@ export class GameHost {
       case 'startTimer':
         this.setTimer(() => {
           const timeout = { type: 'timeout' as const, id: e.id };
-          void (kind === 'undercover' ? this.dispatchUndercover(channel, timeout) : this.dispatch(channel, timeout));
+          if (kind === 'undercover') void this.dispatchUndercover(channel, timeout);
+          else if (kind === 'spyfall') void this.dispatchSpyfall(channel, timeout);
+          else void this.dispatch(channel, timeout);
         }, e.ms);
         return;
       case 'dm':
