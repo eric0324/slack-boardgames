@@ -1234,7 +1234,7 @@ describe('night-phase: 狼人倒數提醒', () => {
 
 describe('announcement-gifs: 開始公告附上規則連結', () => {
   it('開始公告有可以點的「遊戲規則」連結', () => {
-    const url = encodeURI('https://github.com/eric0324/slack-werewolve/wiki/遊戲規則');
+    const url = encodeURI('https://github.com/eric0324/slack-boardgames/wiki/狼人殺-遊戲規則');
     expect(announceWith(started(8).events, '遊戲開始').text).toContain(`<${url}|遊戲規則>`);
   });
 });
