@@ -6,6 +6,8 @@ export const MIN_JUSTONE_PLAYERS = 3;
 export const MAX_JUSTONE_PLAYERS = 7;
 const TITLE = '一字千金';
 const DECK_SIZE = 13;
+const CLUE_MS = 90_000;
+const GUESS_MS = 90_000;
 
 export type JPhase = 'lobby' | 'clue' | 'guess' | 'ended';
 
@@ -24,6 +26,7 @@ export interface JState {
   card: number; // 第幾張（1 起算）
   guesser: number; // 猜詞的人在 players 裡的位置
   score: number;
+  clues: Record<string, string>;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -36,6 +39,7 @@ export type JAction =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
+  | { type: 'clue'; user: string; word: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<JAction, { type: 'new' }>;
@@ -74,7 +78,43 @@ function startRound(c: Ctx) {
   s.word = s.deck.shift();
   s.card++;
   s.phase = 'clue';
-  c.events.push({ type: 'announce', text: `🃏 第 ${s.card} 張：${mention(s.players[s.guesser].id)} 猜詞` });
+  s.clues = {};
+  const guesser = s.players[s.guesser].id;
+  c.events.push({
+    type: 'announce',
+    text: `🃏 第 ${s.card} 張：${mention(guesser)} 猜詞\n其他人請看私訊的詞，用 \`/game justone clue <詞>\` 給一個提示（${CLUE_MS / 1000} 秒），重複的提示會被刪掉！`,
+  });
+  for (const p of s.players.filter((x) => x.id !== guesser)) {
+    c.events.push({ type: 'dm', to: p.id, text: `🃏 第 ${s.card} 張的詞是「${s.word}」，${mention(guesser)} 要猜。用 \`/game justone clue <詞>\` 給一個提示。` });
+  }
+  startTimer(c, CLUE_MS);
+}
+
+function startTimer(c: Ctx, ms: number) {
+  c.s.timers.phase = ++c.s.timerSeq;
+  c.events.push({ type: 'startTimer', id: c.s.timerSeq, ms });
+}
+
+const cluers = (s: JState) => s.players.filter((_, i) => i !== s.guesser).map((p) => p.id);
+
+function giveClue(c: Ctx, user: string, word: string): boolean {
+  const s = c.s;
+  if (!s.players.some((p) => p.id === user)) return false;
+  if (s.phase !== 'clue' || !cluers(s).includes(user)) return reply(c, user, '你現在不能給提示。');
+  const w = word.trim();
+  if (!w || /\s/.test(w)) return reply(c, user, '提示只能是一個詞（不能有空白）。');
+  s.clues[user] = w;
+  reply(c, user, `已收到你的提示「${w}」，在時間內可以重新輸入覆蓋。`);
+  const done = Object.keys(s.clues).length;
+  c.events.push({ type: 'announce', text: `✍️ 已收到 ${done}／${cluers(s).length} 個提示` });
+  if (done === cluers(s).length) endClues(c);
+  return true;
+}
+
+function endClues(c: Ctx) {
+  const s = c.s;
+  s.phase = 'guess';
+  startTimer(c, GUESS_MS);
 }
 
 const reply = (c: Ctx, to: string, text: string) => {
@@ -127,8 +167,14 @@ function handle(c: Ctx, action: GameAction): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
-      return false;
+    case 'clue':
+      return giveClue(c, action.user, action.word);
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'clue') endClues(c);
+      else return false;
+      return true;
+    }
   }
 }
 
@@ -156,6 +202,7 @@ function createLobby(prev: JState | undefined, host: string, channel: string): R
     card: 0,
     guesser: 0,
     score: 0,
+    clues: {},
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
