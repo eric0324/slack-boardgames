@@ -10,7 +10,7 @@ const TARGET_MS = 30_000;
 const LOSE_MS = 30_000;
 const REACT_MS = 20_000;
 
-export type KPhase = 'lobby' | 'action' | 'target' | 'challenge' | 'lose' | 'ended';
+export type KPhase = 'lobby' | 'action' | 'target' | 'challenge' | 'block' | 'lose' | 'ended';
 export type ActKind = 'income' | 'foreignAid' | 'coup' | 'tax' | 'assassinate' | 'steal' | 'exchange';
 
 export type Role = 'duke' | 'assassin' | 'captain' | 'ambassador' | 'contessa';
@@ -64,6 +64,7 @@ export type KAction =
   | { type: 'target'; user: string; target: string }
   | { type: 'reveal'; user: string; index: number }
   | { type: 'challenge'; user: string }
+  | { type: 'block'; user: string; role: Role }
   | { type: 'timeout'; id: number }
   | { type: 'rematch'; user: string; channel: string };
 
@@ -132,6 +133,8 @@ const ACT_LABEL: Record<ActKind, string> = {
   exchange: '🔄 交換（大使）',
 };
 const TARGETED: ActKind[] = ['coup', 'assassinate', 'steal'];
+// 可以被阻擋的行動 → 阻擋用的角色
+const BLOCK: Partial<Record<ActKind, Role[]>> = { foreignAid: ['duke'], assassinate: ['contessa'], steal: ['captain', 'ambassador'] };
 const CLAIM: Partial<Record<ActKind, Role>> = { tax: 'duke', assassinate: 'assassin', steal: 'captain', exchange: 'ambassador' };
 
 const alive = (p: KPlayer) => p.cards.some((x) => !x.revealed);
@@ -191,6 +194,12 @@ function declare(c: Ctx, user: string, kind: ActKind): boolean {
     p.coins += 1;
     c.events.push({ type: 'announce', text: `💰 ${mention(p.id)} 收入，拿 1 枚金幣。` });
     nextTurn(c);
+    return true;
+  }
+  if (kind === 'foreignAid') {
+    s.pending = { actor: p.id, kind };
+    c.events.push({ type: 'announce', text: `🤲 ${mention(p.id)} 要拿外援 2 枚金幣` });
+    openBlock(c);
     return true;
   }
   if (kind === 'tax' || kind === 'exchange') {
@@ -270,9 +279,32 @@ function resolveChallenge(c: Ctx, challenger: string) {
   }
 }
 
-// 行動沒被擋下來：執行效果
+// 行動通過質疑：可以被阻擋的就開阻擋視窗，否則執行
 function proceed(c: Ctx) {
-  execute(c);
+  const { kind, target } = c.s.pending!;
+  if (BLOCK[kind] && kind !== 'foreignAid' && target && alive(playerOf(c.s, target))) openBlock(c);
+  else execute(c);
+}
+
+// 能阻擋的人：外援是其他所有人，刺殺和勒索只有目標
+const blockers = (s: KState) => {
+  const { actor, kind, target } = s.pending!;
+  return kind === 'foreignAid' ? s.players.filter((p) => p.id !== actor && alive(p)).map((p) => p.id) : [target!];
+};
+
+function openBlock(c: Ctx) {
+  const s = c.s;
+  s.phase = 'block';
+  const { kind } = s.pending!;
+  const who = kind === 'foreignAid' ? '任何人' : mention(s.pending!.target!);
+  c.events.push({
+    type: 'prompt',
+    kind: 'block',
+    audience: 'channel',
+    text: `${who}可以在 ${REACT_MS / 1000} 秒內宣稱角色阻擋`,
+    options: BLOCK[kind]!.map((r) => ({ value: r, label: `用${ROLE_NAME[r]}阻擋` })),
+  });
+  startTimer(c, REACT_MS);
 }
 
 function execute(c: Ctx) {
@@ -462,8 +494,18 @@ function handle(c: Ctx, action: GameAction): boolean {
       resolveChallenge(c, p.id);
       return true;
     }
+    case 'block': {
+      if (s.phase !== 'block' || !blockers(s).includes(action.user)) return false;
+      if (!BLOCK[s.pending!.kind]!.includes(action.role)) return false;
+      openChallenge(c, action.user, action.role, true, `阻擋 ${mention(s.pending!.actor)} 的${ACT_LABEL[s.pending!.kind]}`);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'block') {
+        execute(c);
+        return true;
+      }
       if (s.phase === 'challenge') {
         if (s.claim!.forBlock) {
           s.after = 'blocked';

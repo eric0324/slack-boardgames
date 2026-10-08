@@ -249,21 +249,23 @@ describe('coup/turns: 質疑', () => {
     expect(after.state.players[1].coins).toBe(5);
   });
 
-  it('刺殺：選目標時付 3 枚；質疑失敗的目標會先失去一張、再被刺殺', () => {
+  it('刺殺：選目標時付 3 枚；質疑失敗的目標先失去一張，沒阻擋就再被刺殺', () => {
     const s = coins(started(3).state, [2, 2, 3]);
     const r = target('p3', 'p1', act('p3', 'assassinate', s).state);
     expect(r.state.players[2].coins).toBe(0);
     expect(r.state.phase).toBe('challenge');
     const lost = challenge('p1', r.state);
-    const after = reveal('p1', 0, lost.state);
+    const blocking = reveal('p1', 0, lost.state);
+    expect(blocking.state.phase).toBe('block');
+    const after = passWindow(blocking);
     expect(after.state.players[0].cards.every((x) => x.revealed)).toBe(true);
     expect(announces(after.events).join('\n')).toContain('<@p1> 出局');
   });
 
   it('勒索：從目標拿 2 枚（不足就拿光）', () => {
     const s = coins(started(3).state, [1, 2, 2]);
-    expect(passWindow(target('p3', 'p2', act('p3', 'steal', s).state)).state.players.map((p) => p.coins)).toEqual([1, 0, 4]);
-    expect(passWindow(target('p3', 'p1', act('p3', 'steal', s).state)).state.players.map((p) => p.coins)).toEqual([0, 2, 3]);
+    expect(passWindow(passWindow(target('p3', 'p2', act('p3', 'steal', s).state))).state.players.map((p) => p.coins)).toEqual([1, 0, 4]);
+    expect(passWindow(passWindow(target('p3', 'p1', act('p3', 'steal', s).state))).state.players.map((p) => p.coins)).toEqual([0, 2, 3]);
   });
 
   it('宣稱的人自己、出局的人不能質疑', () => {
@@ -271,5 +273,51 @@ describe('coup/turns: 質疑', () => {
     expect(challenge('p3', r.state).state.phase).toBe('challenge');
     const dead = withCards(r.state, 0, [true, true]);
     expect(challenge('p1', dead).state.phase).toBe('challenge');
+  });
+});
+
+const block = (user: string, role: string, s: KState) => run([{ type: 'block', user, role } as KAction], s);
+
+describe('coup/turns: 阻擋', () => {
+  it('外援：任何人可以宣稱公爵阻擋，20 秒；沒人阻擋就拿 2 枚', () => {
+    const r = act('p3', 'foreignAid', started(3).state);
+    expect(r.state.phase).toBe('block');
+    expect(prompts(r.events, 'block').at(-1)!.options).toEqual([{ value: 'duke', label: '用公爵阻擋' }]);
+    expect(lastTimer(r.events).ms).toBe(20_000);
+    expect(passWindow(r).state.players[2].coins).toBe(4);
+  });
+
+  it('阻擋後開質疑視窗；沒人質疑就擋下來', () => {
+    const r = block('p1', 'duke', act('p3', 'foreignAid', started(3).state).state);
+    expect(r.state).toMatchObject({ phase: 'challenge', claim: { by: 'p1', role: 'duke', forBlock: true } });
+    const after = passWindow(r);
+    expect(after.state.players[2].coins).toBe(2);
+    expect(announces(after.events).join('\n')).toContain('被擋下來');
+    expect(after.state).toMatchObject({ phase: 'action', turn: 0 });
+  });
+
+  it('阻擋的人說謊被抓：阻擋的人失去影響力，行動照常', () => {
+    const s = { ...started(3).state, turn: 0 };
+    const r = challenge('p1', block('p3', 'duke', act('p1', 'foreignAid', s).state).state);
+    expect(r.state.losing).toEqual(['p3']);
+    expect(reveal('p3', 0, r.state).state.players[0].coins).toBe(4);
+  });
+
+  it('刺殺只有目標能用女伯爵阻擋；擋下來時 3 枚不退', () => {
+    const s = coins(started(3).state, [2, 2, 3]);
+    const blocking = passWindow(target('p3', 'p1', act('p3', 'assassinate', s).state));
+    expect(blocking.state.phase).toBe('block');
+    expect(prompts(blocking.events, 'block').at(-1)!.options).toEqual([{ value: 'contessa', label: '用女伯爵阻擋' }]);
+    expect(block('p2', 'contessa', blocking.state).state.phase).toBe('block');
+    const after = passWindow(block('p1', 'contessa', blocking.state));
+    expect(after.state.players[2].coins).toBe(0);
+    expect(after.state.players[0].cards.some((x) => x.revealed)).toBe(false);
+  });
+
+  it('勒索可以用隊長或大使阻擋', () => {
+    const blocking = passWindow(target('p3', 'p2', act('p3', 'steal', started(3).state).state));
+    expect(prompts(blocking.events, 'block').at(-1)!.options.map((o) => o.value)).toEqual(['captain', 'ambassador']);
+    expect(block('p2', 'contessa', blocking.state).state.phase).toBe('block');
+    expect(block('p2', 'ambassador', blocking.state).state.phase).toBe('challenge');
   });
 });
