@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GIFS } from '../src/gifs.js';
 import { StatsStore } from '../src/stats.js';
 import { mention } from '../src/engine.js';
-import { buttonAction, GameHost, parseCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
+import { buttonAction, GameHost, parseCommand, parseSpyfallCommand, parseUndercoverCommand, type SlackClient } from '../src/slack.js';
 
 type Call = { method: string; args: Record<string, any> };
 
@@ -476,7 +476,9 @@ describe('game-commands: /game 指令與多款遊戲', () => {
     const { host, calls } = setup();
     await host.game('C1', 'U1', 'alice', '');
     const text = lastEph(calls).text;
-    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new']) expect(text).toContain(s);
+    for (const s of ['狼人殺', 'werewolf', '誰是臥底', 'undercover', '/game undercover new', '間諜危機', 'spyfall', '4～10 人', '/game spyfall new']) {
+      expect(text).toContain(s);
+    }
   });
 
   it('/game werewolf new 和 /werewolf new 效果相同', async () => {
@@ -562,5 +564,66 @@ describe('game-commands: /game 指令與多款遊戲', () => {
     const host = new GameHost(client, { stats, setTimer: () => {} });
     await host.game('C1', 'U1', 'alice', 'stats');
     expect(lastEph(calls).text).toContain('總計：1 場 1 勝');
+  });
+});
+
+describe('game-commands: 間諜危機', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game spyfall new 開間諜危機的房間，按鈕加入會更新公告', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'spyfall new');
+    expect(calls.at(-1)!.args.text).toContain('間諜危機房間');
+    await host.button('ww:join:0', 'C1|join', 'U2', 'bob');
+    expect(host.spyfallGames.get('C1')!.players.map((p) => p.id)).toEqual(['U1', 'U2']);
+  });
+
+  it('/game spyfall help 列出間諜危機的指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'spyfall help');
+    const text = lastEph(calls).text;
+    for (const s of ['new', 'addbot', 'removebot', 'start', 'next', 'vote', 'cancel', 'guess']) expect(text).toContain(`/game spyfall ${s}`);
+  });
+
+  it('一個頻道同時只有一局：間諜危機和其他遊戲互相擋', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', 'spyfall new');
+    await host.game('C1', 'U2', 'bob', 'undercover new');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    await host.game('C1', 'U2', 'bob', 'werewolf start');
+    expect(lastEph(calls)).toMatchObject({ user: 'U2', text: '這個指令不適用於目前的遊戲。' });
+
+    const other = setup();
+    await other.host.game('C2', 'U1', 'alice', 'undercover new');
+    await other.host.game('C2', 'U2', 'bob', 'spyfall new');
+    expect(lastEph(other.calls)).toMatchObject({ user: 'U2', text: '這個頻道已經有遊戲了。' });
+    expect(other.host.spyfallGames.has('C2')).toBe(false);
+  });
+
+  it('開始按鈕、私訊、選人和回答完畢按鈕、計時都交給間諜危機', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'spyfall new');
+    for (const u of ['U2', 'U3', 'U4']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(host.spyfallGames.get('C1')!.qa).toMatchObject({ step: 'choose', asker: 'U4' });
+    expect(calls.some((c) => c.method === 'chat.postMessage' && String(c.args.text).includes('你是間諜'))).toBe(true);
+    await host.button('ww:askTarget:1', 'C1|U2', 'U4', 'U4');
+    expect(host.spyfallGames.get('C1')!.qa).toMatchObject({ step: 'answer', target: 'U2' });
+    await host.button('ww:endAnswer:0', 'C1|U2', 'U2', 'U2');
+    expect(host.spyfallGames.get('C1')!.qa).toMatchObject({ step: 'choose', asker: 'U2' });
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.spyfallGames.get('C1')!.qa!.step).toBe('answer');
+  });
+
+  it('指令解析：guess 地點、next、vote、addbot', () => {
+    expect(parseSpyfallCommand('guess  KTV包廂 ', 'U1', 'C1')).toEqual({ type: 'guess', user: 'U1', location: 'KTV包廂' });
+    expect(parseSpyfallCommand('next', 'U1', 'C1')).toEqual({ type: 'skipSpeaker', user: 'U1' });
+    expect(parseSpyfallCommand('vote', 'U1', 'C1')).toEqual({ type: 'endDiscussion', user: 'U1' });
+    expect(parseSpyfallCommand('addbot 2', 'U1', 'C1')).toEqual({ type: 'addBot', user: 'U1', count: 2 });
+    expect(parseSpyfallCommand('guess', 'U1', 'C1')).toBeNull();
+    expect(parseSpyfallCommand('dance', 'U1', 'C1')).toBeNull();
   });
 });
