@@ -55,3 +55,25 @@ describe('justone/setup: 一字千金的房間', () => {
     expect(ephemeralTo(run([{ type: 'start', user: 'p2' }], lobby).events, 'p2')).toBeDefined();
   });
 });
+
+// rng 固定：牌堆是詞庫最前面的 13 個詞（不洗牌），第一位猜詞的是最後一位玩家
+const started = (n: number, r: () => number = rng) => run([{ type: 'start', user: 'p1' }], lobbyWith(n).state, r);
+
+describe('justone/setup: 牌堆', () => {
+  it('13 張不重複的詞，隨機第一位猜詞的人', () => {
+    const { state, events } = started(4);
+    expect(state.deck.length + 1).toBe(13);
+    expect(new Set([...state.deck, state.word]).size).toBe(13);
+    expect(state.guesser).toBe(3);
+    const text = announces(events).join('\n');
+    expect(text).toContain('13 張');
+    expect(text).toContain('第 1 張：<@p4> 猜詞');
+  });
+
+  it('牌堆和第一位都是隨機的', () => {
+    const a = started(4, () => 0).state;
+    const b = started(4).state;
+    expect(a.guesser).not.toBe(b.guesser);
+    expect(a.word).not.toBe(b.word);
+  });
+});
