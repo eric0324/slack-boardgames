@@ -461,3 +461,35 @@ describe('undercover/bots: bot 投票與猜詞', () => {
     }
   });
 });
+
+const gifOf = (events: GameEvent[], text: string) =>
+  (events.find((e) => e.type === 'announce' && e.text.includes(text)) as { gif?: string } | undefined)?.gif;
+const gifs = (events: GameEvent[]) => events.filter((e) => e.type === 'announce' && e.gif).map((e) => (e as { gif: string }).gif);
+
+describe('announcement-gifs: 誰是臥底', () => {
+  it('放逐平民或白板：附「放逐」的 GIF', () => {
+    expect(gifOf(exile6('p3').events, '出局')).toBe('exile');
+    expect(gifOf(exile6('p2').events, '出局')).toBe('exile');
+  });
+
+  it('放逐到最後一位臥底：結束公告附「抓到了」的 GIF，只有一張', () => {
+    const { events } = run(votes([['p2', 'p1'], ['p3', 'p1'], ['p4', 'p1'], ['p1', 'p2']]), voting4().state);
+    expect(gifs(events)).toEqual(['duelWin']);
+    expect(gifOf(events, '遊戲結束')).toBe('duelWin');
+  });
+
+  it('放逐平民後臥底陣營追上：結束公告附「放逐」的 GIF，只有一張', () => {
+    const { events } = exile6('p4', nextVote(exile6('p3').state));
+    expect(gifs(events)).toEqual(['exile']);
+    expect(gifOf(events, '遊戲結束')).toBe('exile');
+  });
+
+  it('白板猜中：結束公告附「猜對了」；猜錯而遊戲繼續：附「猜錯了」', () => {
+    const { state } = exile6('p2');
+    const right = run([{ type: 'guess', user: 'p2', word: state.words!.civilian }], state).events;
+    expect(gifs(right)).toEqual(['guessRight']);
+    expect(gifOf(right, '遊戲結束')).toBe('guessRight');
+    const wrong = run([{ type: 'guess', user: 'p2', word: state.words!.undercover }], state).events;
+    expect(gifOf(wrong, '沒猜中')).toBe('guessWrong');
+  });
+});

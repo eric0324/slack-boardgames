@@ -152,7 +152,14 @@ export type GifKey =
   | 'duelWin'
   | 'duelLose'
   | 'goodWin'
-  | 'wolvesWin';
+  | 'wolvesWin'
+  | 'guessRight'
+  | 'guessWrong'
+  | 'teamApproved'
+  | 'teamRejected'
+  | 'questSuccess'
+  | 'questFail'
+  | 'assassination';
 
 interface Result {
   state: GameState;

@@ -1,7 +1,7 @@
 // 誰是臥底遊戲引擎：純邏輯，不碰任何 I/O。介面和狼人殺一樣：applyUndercover(state, action, rng) → { state, events }。
 // events 沿用狼人殺的 GameEvent，adapter 的 send() 可以共用。
 import { randomBotName } from './botLines.js';
-import { isBot, MAX_PLAYERS, mention, type GameEvent, type Rng } from './engine.js';
+import { isBot, MAX_PLAYERS, mention, type GameEvent, type GifKey, type Rng } from './engine.js';
 import { BLANK_LINES, WORD_PAIRS } from './undercoverWords.js';
 
 export const MIN_UNDERCOVER_PLAYERS = 4;
@@ -268,7 +268,10 @@ function eliminate(c: Ctx, id: string) {
   const s = c.s;
   const p = s.players.find((x) => x.id === id)!;
   p.alive = false;
-  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局，身分是${ROLE_NAME_U[p.role!]}。`, gif: 'exile' });
+  const gif: GifKey = p.role === 'undercover' ? 'duelWin' : 'exile';
+  // 白板出局後還要猜詞，不會立刻結束
+  const ending = p.role !== 'blank' && checkUndercoverWinner(s.players) !== null;
+  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局，身分是${ROLE_NAME_U[p.role!]}。`, ...(ending ? {} : { gif }) });
   if (p.role === 'blank') {
     s.phase = 'guess';
     s.guesser = id;
@@ -279,7 +282,7 @@ function eliminate(c: Ctx, id: string) {
     startTimer(c, GUESS_MS);
     return;
   }
-  continueGame(c);
+  continueGame(c, gif);
 }
 
 const normalize = (word: string) => word.trim().toLowerCase();
@@ -291,12 +294,13 @@ function finishGuess(c: Ctx, word: string | undefined) {
   s.timers = {};
   if (word !== undefined && normalize(word) === normalize(s.words!.civilian)) {
     c.events.push({ type: 'announce', text: `🎯 ${mention(guesser)} 猜「${word.trim()}」，猜中了平民詞！` });
-    endGame(c, 'undercover');
+    endGame(c, 'undercover', 'guessRight');
     return;
   }
   const text = word === undefined ? `${mention(guesser)} 沒有猜詞。` : `${mention(guesser)} 猜「${word.trim()}」，沒猜中。`;
-  c.events.push({ type: 'announce', text });
-  continueGame(c);
+  const ending = checkUndercoverWinner(s.players) !== null;
+  c.events.push({ type: 'announce', text, ...(ending ? {} : { gif: 'guessWrong' as const }) });
+  continueGame(c, 'guessWrong');
 }
 
 // 臥底全部出局 → 平民勝（白板活著也一樣）；臥底陣營（臥底＋白板）≥ 平民 → 臥底陣營勝
@@ -308,14 +312,14 @@ export function checkUndercoverWinner(players: UPlayer[]): 'civilian' | 'underco
   return null;
 }
 
-// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪
-function continueGame(c: Ctx) {
+// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪；gif 是這個時刻的 GIF，結束時改附在結束公告上
+function continueGame(c: Ctx, gif?: GifKey) {
   const winner = checkUndercoverWinner(c.s.players);
-  if (winner) endGame(c, winner);
+  if (winner) endGame(c, winner, gif);
   else startRound(c);
 }
 
-function endGame(c: Ctx, winner: 'civilian' | 'undercover') {
+function endGame(c: Ctx, winner: 'civilian' | 'undercover', gif?: GifKey) {
   const s = c.s;
   s.phase = 'ended';
   s.timers = {};
@@ -328,7 +332,7 @@ function endGame(c: Ctx, winner: 'civilian' | 'undercover') {
     {
       type: 'announce',
       text: `${title}\n平民詞：${s.words!.civilian}／臥底詞：${s.words!.undercover}\n${roster}`,
-      gif: winner === 'civilian' ? 'goodWin' : 'wolvesWin',
+      gif: gif ?? (winner === 'civilian' ? 'goodWin' : 'wolvesWin'),
     },
     { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
   );

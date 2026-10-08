@@ -282,14 +282,17 @@ describe('Slack：公告 GIF', () => {
     expect(call.args.blocks).toBeUndefined();
   });
 
-  it('預設設定檔每個時刻都有至少 6 張 Giphy GIF，而且不重複', () => {
-    const keys = ['start', 'night', 'dawnDeath', 'dawnPeace', 'exile', 'wolfKingShot', 'pk', 'duelWin', 'duelLose', 'goodWin', 'wolvesWin'];
+  it('預設設定檔每個時刻都有至少 10 張 Giphy GIF，而且不重複', () => {
+    const keys = [
+      'start', 'night', 'dawnDeath', 'dawnPeace', 'exile', 'wolfKingShot', 'pk', 'duelWin', 'duelLose', 'goodWin', 'wolvesWin',
+      'guessRight', 'guessWrong', 'teamApproved', 'teamRejected', 'questSuccess', 'questFail', 'assassination',
+    ];
     expect(Object.keys(GIFS).sort()).toEqual([...keys].sort());
     const all = Object.values(GIFS).flat();
     expect(new Set(all).size).toBe(all.length);
     for (const k of keys) {
       const urls = GIFS[k as keyof typeof GIFS];
-      expect(urls.length, k).toBeGreaterThanOrEqual(6);
+      expect(urls.length, k).toBeGreaterThanOrEqual(10);
       for (const u of urls) expect(u).toMatch(/^https:\/\/media\.giphy\.com\/media\/\w+\/200\.gif$/);
     }
   });

@@ -491,3 +491,39 @@ describe('avalon/bots: bot 的行動', () => {
     }
   });
 });
+
+const gifOf = (events: GameEvent[], text: string) =>
+  (events.find((e) => e.type === 'announce' && e.text.includes(text)) as { gif?: string } | undefined)?.gif;
+const gifs = (events: GameEvent[]) => events.filter((e) => e.type === 'announce' && e.gif).map((e) => (e as { gif: string }).gif);
+
+describe('announcement-gifs: 阿瓦隆', () => {
+  it('隊伍通過和被否決用不同的 GIF', () => {
+    const s = teamVoting().state;
+    expect(gifOf(approveAll(s).events, '隊伍通過')).toBe('teamApproved');
+    const rejected = teamVotes(s.players.map((p) => [p.id, 'reject'] as [string, 'reject']), s).events;
+    expect(gifOf(rejected, '隊伍被否決')).toBe('teamRejected');
+  });
+
+  it('任務成功和失敗用不同的 GIF', () => {
+    expect(gifOf(playQuests([false]).events, '任務 1 成功')).toBe('questSuccess');
+    expect(gifOf(playQuests([true]).events, '任務 1 失敗')).toBe('questFail');
+  });
+
+  it('第 3 個任務成功進入刺殺：只附「進入刺殺」的 GIF', () => {
+    const { events } = assassinating();
+    expect(gifs(events)).toEqual(['assassination']);
+    expect(gifOf(events, '好人完成了 3 個任務')).toBe('assassination');
+  });
+
+  it('造成結束的時刻：GIF 附在結束公告上，取代勝利 GIF', () => {
+    const s = assassinating().state;
+    expect(gifs(stab('p4', 'p1', s).events)).toEqual(['duelWin']);
+    expect(gifOf(stab('p4', 'p1', s).events, '遊戲結束')).toBe('duelWin');
+    expect(gifs(stab('p4', 'p3', s).events)).toEqual(['duelLose']);
+    expect(gifs(playQuests([true, true, true]).events)).toEqual(['questFail']);
+    let res = started(5);
+    for (let i = 0; i < 5; i++) res = rejectAll(res.state);
+    expect(gifs(res.events)).toEqual(['teamRejected']);
+    expect(gifOf(res.events, '遊戲結束')).toBe('teamRejected');
+  });
+});
