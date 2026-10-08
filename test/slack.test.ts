@@ -870,3 +870,51 @@ describe('game-commands: 一字千金', () => {
     expect(parseJustOneCommand('clue', 'U1', 'C1')).toBeNull();
   });
 });
+
+describe('game-commands: 政變', () => {
+  const lastEph = (calls: Call[]) => calls.filter((c) => c.method === 'chat.postEphemeral').at(-1)!.args;
+
+  it('/game 清單有政變；/game coup help 列出指令', async () => {
+    const { host, calls } = setup();
+    await host.game('C1', 'U1', 'alice', '');
+    for (const s of ['政變', 'coup', '3～6 人', '/game coup new']) expect(lastEph(calls).text).toContain(s);
+    await host.game('C1', 'U1', 'alice', 'coup help');
+    for (const s of ['new', 'addbot', 'removebot', 'start', 'cancel']) expect(lastEph(calls).text).toContain(`/game coup ${s}`);
+  });
+
+  it('行動、目標、質疑、阻擋、私訊翻牌和交換的按鈕都交給政變', async () => {
+    const { client, calls } = fakeClient();
+    const timers: { fn: () => void; ms: number }[] = [];
+    const host = new GameHost(client, { rng: () => 0.99999, setTimer: (fn, ms) => void timers.push({ fn, ms }), gifs: {} });
+    await host.game('C1', 'U1', 'alice', 'coup new');
+    expect(calls.at(-1)!.args.text).toContain('政變房間');
+    for (const u of ['U2', 'U3']) await host.button('ww:join:0', 'C1|join', u, u);
+    await host.button('ww:start:2', 'C1|start', 'U1', 'alice');
+    expect(calls.some((c) => c.method === 'chat.postMessage' && c.args.channel === 'D:U1' && String(c.args.text).includes('你的手牌'))).toBe(true);
+    // U3 宣稱公爵收稅，U1 質疑成功 → U3 在私訊選一張翻開
+    await host.button('ww:coupAction:2', 'C1|tax', 'U3', 'U3');
+    await host.button('ww:challenge:0', 'C1|challenge', 'U1', 'U1');
+    expect(host.coupGames.get('C1')!.losing).toEqual(['U3']);
+    await host.button('ww:loseCard:0', 'C1|0', 'U3', 'U3');
+    expect(host.coupGames.get('C1')!.players[2].cards[0].revealed).toBe(true);
+    // U1 外援，U2 用公爵阻擋，沒人質疑就擋下來
+    await host.button('ww:coupAction:1', 'C1|foreignAid', 'U1', 'U1');
+    await host.button('ww:block:0', 'C1|duke', 'U2', 'U2');
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.coupGames.get('C1')!.players[0].coins).toBe(2);
+    // U2 對 U1 勒索：選目標
+    await host.button('ww:coupAction:3', 'C1|steal', 'U2', 'U2');
+    await host.button('ww:coupTarget:0', 'C1|U1', 'U2', 'U2');
+    expect(host.coupGames.get('C1')!.phase).toBe('challenge');
+    // U3 交換
+    const s = host.coupGames.get('C1')!;
+    host.coupGames.set('C1', { ...s, phase: 'action', turn: 2, pending: undefined });
+    await host.button('ww:coupAction:4', 'C1|exchange', 'U3', 'U3');
+    timers.at(-1)!.fn();
+    await host.idle();
+    expect(host.coupGames.get('C1')!.phase).toBe('exchange');
+    await host.button('ww:keepCard:0', 'C1|1', 'U3', 'U3');
+    expect(host.coupGames.get('C1')!.phase).toBe('action');
+  });
+});

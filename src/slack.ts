@@ -4,12 +4,13 @@ import { GIFS } from './gifs.js';
 import { formatStats, type StatsStore } from './stats.js';
 import { applyAvalon, type AAction, type AState } from './avalon.js';
 import { applyCodenames, type CAction, type CState } from './codenames.js';
+import { applyCoup, type KAction, type KState } from './coup.js';
 import { applyJustOne, type JAction, type JState } from './justone.js';
 import { applyLiarsDice, type LAction, type LState } from './liarsdice.js';
 import { applySpyfall, type SAction, type SState } from './spyfall.js';
 import { applyUndercover, type UAction, type UState } from './undercover.js';
 
-type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice' | 'justone';
+type Kind = 'werewolf' | 'undercover' | 'spyfall' | 'avalon' | 'codenames' | 'liarsdice' | 'justone' | 'coup';
 type OtherKind = Exclude<Kind, 'werewolf'>;
 
 // 狼人殺以外的遊戲都用同一套方式接上 adapter：engine、指令解析、按鈕對應、說明
@@ -64,6 +65,7 @@ const GAME_LIST = [
   '• 🟥 *機密代號*（`codenames`）：4～12 人（不支援 bot），開房 `/game codenames new`',
   '• 🎲 *吹牛骰*（`liarsdice`）：2～8 人，開房 `/game liarsdice new`',
   '• 💡 *一字千金*（`justone`）：3～7 人（不支援 bot），開房 `/game justone new`',
+  '• 👑 *政變*（`coup`）：3～6 人，開房 `/game coup new`',
   '各遊戲的指令：`/game <遊戲代號> help`，例如 `/game liarsdice help`',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
@@ -137,6 +139,17 @@ const JUSTONE_HELP = [
   '• `/game justone guess <詞>`：猜詞（猜詞的人），沒把握可以按「跳過」',
   '• `/game justone next`：跳過卡住的步驟（房主）',
   '• `/game justone cancel`：取消遊戲（房主）',
+  `📖 完整說明：<${WIKI}|wiki>`,
+].join('\n');
+
+const COUP_HELP = [
+  '*政變指令*',
+  '• `/game coup new`：開房（任何人）',
+  '• `/game coup addbot [數量]`：加入 bot 補人數（房主，開始前）',
+  '• `/game coup removebot [數量]`：移除 bot（房主，開始前）',
+  '• `/game coup start`：開始遊戲，需要 3～6 人（房主）',
+  '• `/game coup cancel`：取消遊戲（房主）',
+  '行動、選目標、質疑、阻擋都用頻道按鈕；翻牌和大使交換用私訊按鈕',
   `📖 完整說明：<${WIKI}|wiki>`,
 ].join('\n');
 
@@ -243,6 +256,37 @@ function justOneButton(kind: string, _value: string, user: string, channel: stri
   if (kind === 'join' || kind === 'leave' || kind === 'start' || kind === 'skipGuess') return { type: kind, user };
   if (kind === 'rematch') return { type: 'rematch', user, channel };
   return null;
+}
+
+// 政變只有房間指令，遊戲中都用按鈕
+export function parseCoupCommand(text: string, user: string, channel: string): KAction | null {
+  const action = parseUndercoverCommand(text, user, channel);
+  if (!action || !['new', 'start', 'cancel', 'addBot', 'removeBot'].includes(action.type)) return null;
+  return action as KAction;
+}
+
+function coupButton(kind: string, value: string, user: string, channel: string): KAction | null {
+  switch (kind) {
+    case 'join':
+    case 'leave':
+    case 'start':
+    case 'challenge':
+      return { type: kind, user };
+    case 'coupAction':
+      return { type: 'act', user, kind: value as Extract<KAction, { type: 'act' }>['kind'] };
+    case 'coupTarget':
+      return { type: 'target', user, target: value };
+    case 'block':
+      return { type: 'block', user, role: value as Extract<KAction, { type: 'block' }>['role'] };
+    case 'loseCard':
+      return { type: 'reveal', user, index: Number(value) };
+    case 'keepCard':
+      return { type: 'keep', user, index: Number(value) };
+    case 'rematch':
+      return { type: 'rematch', user, channel };
+    default:
+      return null;
+  }
 }
 
 function codenamesButton(kind: string, value: string, user: string, channel: string): CAction | null {
@@ -370,6 +414,7 @@ export class GameHost {
   codenamesGames = new Map<string, CState>();
   liarsDiceGames = new Map<string, LState>();
   justOneGames = new Map<string, JState>();
+  coupGames = new Map<string, KState>();
   private lastKind = new Map<string, Kind>(); // 每個頻道最近一局是哪款遊戲
   private lobbyTs = new Map<string, string>();
   private boardTs = new Map<string, string>(); // 機密代號的牌桌訊息
@@ -398,6 +443,7 @@ export class GameHost {
       codenames: { states: this.codenamesGames, apply: applyCodenames, parse: parseCodenamesCommand, button: codenamesButton, help: CODENAMES_HELP },
       liarsdice: { states: this.liarsDiceGames, apply: applyLiarsDice, parse: parseLiarsDiceCommand, button: liarsDiceButton, help: LIARSDICE_HELP },
       justone: { states: this.justOneGames, apply: applyJustOne, parse: parseJustOneCommand, button: justOneButton, help: JUSTONE_HELP },
+      coup: { states: this.coupGames, apply: applyCoup, parse: parseCoupCommand, button: coupButton, help: COUP_HELP },
     };
   }
 
