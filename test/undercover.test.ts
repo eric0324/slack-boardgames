@@ -241,3 +241,69 @@ describe('undercover/rounds: 投票與 PK', () => {
     expect(state).toMatchObject({ phase: 'speech', round: 2 });
   });
 });
+
+// 6 人局：p1 臥底、p2 白板、p3~p6 平民。所有人都投 target，target 自己投給別人
+const voting6 = () => run([{ type: 'endDiscussion', user: 'p1' }], startedU(6).state);
+const exile6 = (target: string, from = voting6().state) => {
+  const others = from.players.filter((p) => p.alive).map((p) => p.id);
+  return run(votes(others.map((u) => [u, u === target ? others.find((o) => o !== target)! : target])), from);
+};
+
+describe('undercover/rounds: 出局公開身分', () => {
+  it('放逐平民：公開身分是平民，不公開詞', () => {
+    const { state, events } = exile6('p3');
+    const text = announces(events).join('\n');
+    expect(text).toContain('<@p3> 出局，身分是平民');
+    expect(text).not.toContain(state.words!.civilian);
+    expect(state.phase).toBe('speech');
+  });
+
+  it('放逐臥底：公開身分是臥底', () => {
+    expect(announces(exile6('p1').events)).toContainEqual(expect.stringContaining('<@p1> 出局，身分是臥底'));
+  });
+
+  it('出局的玩家不能描述也不能投票', () => {
+    const { state } = exile6('p3');
+    expect(state.speakers.concat(state.speaker ?? [])).not.toContain('p3');
+  });
+});
+
+describe('undercover/rounds: 白板猜詞', () => {
+  it('放逐白板：公開身分是白板，給 60 秒猜詞', () => {
+    const { state, events } = exile6('p2');
+    expect(announces(events)).toContainEqual(expect.stringContaining('<@p2> 出局，身分是白板'));
+    expect(announces(events).join('\n')).toContain('/game undercover guess');
+    expect(state).toMatchObject({ phase: 'guess', guesser: 'p2' });
+    expect(lastTimer(events).ms).toBe(60_000);
+  });
+
+  it('白板猜中（忽略前後空白和大小寫）：臥底陣營獲勝', () => {
+    const { state } = exile6('p2');
+    const guess = `  ${state.words!.civilian.toUpperCase()} `;
+    const after = run([{ type: 'guess', user: 'p2', word: guess }], state);
+    expect(announces(after.events)).toContainEqual(expect.stringContaining('猜中'));
+    expect(after.state).toMatchObject({ phase: 'ended', winner: 'undercover' });
+  });
+
+  it('白板猜錯：照一般規則繼續遊戲，而且不能再猜', () => {
+    const { state } = exile6('p2');
+    const after = run([{ type: 'guess', user: 'p2', word: state.words!.undercover }], state);
+    expect(announces(after.events)).toContainEqual(expect.stringContaining('沒猜中'));
+    expect(after.state.phase).toBe('speech');
+    const again = run([{ type: 'guess', user: 'p2', word: state.words!.civilian }], after.state);
+    expect(ephemeralTo(again.events, 'p2')).toMatchObject({ text: '現在不能猜詞。' });
+  });
+
+  it('白板 60 秒內沒有猜：視為沒猜中', () => {
+    const { state, events } = exile6('p2');
+    const after = run([{ type: 'timeout', id: lastTimer(events).id }], state);
+    expect(after.state.phase).toBe('speech');
+  });
+
+  it('不是被放逐的白板不能猜', () => {
+    const { state } = exile6('p2');
+    const denied = run([{ type: 'guess', user: 'p3', word: state.words!.civilian }], state);
+    expect(denied.state.phase).toBe('guess');
+    expect(ephemeralTo(denied.events, 'p3')).toMatchObject({ text: '現在不能猜詞。' });
+  });
+});

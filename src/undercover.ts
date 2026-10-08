@@ -50,6 +50,8 @@ export interface UState {
   votes: Record<string, string>;
   candidates: string[];
   voters: string[];
+  guesser?: string; // 正在猜詞的白板
+  winner?: 'civilian' | 'undercover';
 }
 
 export type UAction =
@@ -64,6 +66,7 @@ export type UAction =
   | { type: 'skipSpeaker'; user: string }
   | { type: 'endDiscussion'; user: string }
   | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
+  | { type: 'guess'; user: string; word: string }
   | { type: 'timeout'; id: number };
 
 interface Result {
@@ -225,10 +228,64 @@ function startPk(c: Ctx, tied: string[]) {
   nextSpeaker(c);
 }
 
+// 放逐：公開身分但不公開詞；白板還有一次猜詞機會
 function eliminate(c: Ctx, id: string) {
-  c.s.players.find((p) => p.id === id)!.alive = false;
-  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局。`, gif: 'exile' });
+  const s = c.s;
+  const p = s.players.find((x) => x.id === id)!;
+  p.alive = false;
+  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局，身分是${ROLE_NAME_U[p.role!]}。`, gif: 'exile' });
+  if (p.role === 'blank') {
+    s.phase = 'guess';
+    s.guesser = id;
+    c.events.push({
+      type: 'announce',
+      text: `🤔 白板有 ${GUESS_MS / 1000} 秒可以猜平民詞：輸入 \`/game undercover guess <詞>\`，猜中臥底陣營直接獲勝。`,
+    });
+    startTimer(c, GUESS_MS);
+    return;
+  }
+  continueGame(c);
+}
+
+const normalize = (word: string) => word.trim().toLowerCase();
+
+function finishGuess(c: Ctx, word: string | undefined) {
+  const s = c.s;
+  const guesser = s.guesser!;
+  s.guesser = undefined;
+  s.timers = {};
+  if (word !== undefined && normalize(word) === normalize(s.words!.civilian)) {
+    c.events.push({ type: 'announce', text: `🎯 ${mention(guesser)} 猜「${word.trim()}」，猜中了平民詞！` });
+    endGame(c, 'undercover');
+    return;
+  }
+  const text = word === undefined ? `${mention(guesser)} 沒有猜詞。` : `${mention(guesser)} 猜「${word.trim()}」，沒猜中。`;
+  c.events.push({ type: 'announce', text });
+  continueGame(c);
+}
+
+// 放逐（或白板猜詞）之後：判斷勝負，沒結束就開始下一輪（勝負判定在 task 4.1 補上）
+function continueGame(c: Ctx) {
   startRound(c);
+}
+
+function endGame(c: Ctx, winner: 'civilian' | 'undercover') {
+  const s = c.s;
+  s.phase = 'ended';
+  s.timers = {};
+  s.winner = winner;
+  const title = winner === 'civilian' ? '🎉 遊戲結束，平民獲勝！' : '🕵️ 遊戲結束，臥底陣營獲勝！';
+  const roster = s.players
+    .map((p) => `${mention(p.id)}：${ROLE_NAME_U[p.role!]}${p.word ? `（${p.word}）` : ''}，${p.alive ? '存活' : '出局'}`)
+    .join('\n');
+  c.events.push(
+    {
+      type: 'announce',
+      text: `${title}\n平民詞：${s.words!.civilian}／臥底詞：${s.words!.undercover}\n${roster}`,
+      gif: winner === 'civilian' ? 'goodWin' : 'wolvesWin',
+    },
+    { type: 'prompt', kind: 'rematch', audience: 'channel', text: '要再來一局嗎？', options: [{ value: 'rematch', label: '再來一局' }] },
+  );
 }
 
 const isSpeaking = (s: UState) => s.phase === 'speech' || s.phase === 'pkSpeech';
@@ -344,10 +401,16 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
       if (s.voters.every((v) => s.votes[v])) endVote(c);
       return true;
     }
+    case 'guess': {
+      if (s.phase !== 'guess' || action.user !== s.guesser) return reply(c, action.user, '現在不能猜詞。');
+      finishGuess(c, action.word);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
       if (isSpeaking(s)) nextSpeaker(c);
       else if (s.phase === 'vote' || s.phase === 'pkVote') endVote(c);
+      else if (s.phase === 'guess') finishGuess(c, undefined);
       else return false;
       return true;
     }
