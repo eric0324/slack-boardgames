@@ -4,7 +4,7 @@
 
 ## 1. 詞庫
 
-- [ ] 1.1 新增 `src/undercoverWords.ts`：至少 60 組詞、每個詞至少 3 句描述句，加上白板 bot 用的通用台詞；確認 undercover/setup「詞庫」的 scenarios 測試通過
+- [x] 1.1 新增 `src/undercoverWords.ts`：至少 60 組詞、每個詞至少 3 句描述句，加上白板 bot 用的通用台詞；確認 undercover/setup「詞庫」的 scenarios 測試通過
 
 ## 2. 誰是臥底 engine：房間與發詞
 
