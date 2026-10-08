@@ -138,3 +138,49 @@ describe('justone/rounds: 刪除重複的提示', () => {
     expect(p.options).toEqual([{ value: 'p4', label: '跳過' }]);
   });
 });
+
+const guessing = () => clues([['p1', 'a'], ['p2', 'b'], ['p3', 'c']], started(4).state).state;
+const guess = (user: string, word: string, s: JState) => run([{ type: 'guess', user, word }], s);
+
+describe('justone/rounds: 猜詞與計分', () => {
+  it('猜對（忽略前後空白和大小寫）：得分，公開答案和被刪掉的提示，換下一位猜詞', () => {
+    const s = clues([['p1', '水果'], ['p2', '水果'], ['p3', '牛頓']], started(4).state).state;
+    const { state, events } = guess('p4', ` ${s.word!.toUpperCase()} `, s);
+    expect(state).toMatchObject({ score: 1, card: 2, guesser: 0, phase: 'clue' });
+    const text = announces(events).join('\n');
+    expect(text).toContain('猜對了');
+    expect(text).toContain(`答案是「${s.word}」`);
+    expect(text).toContain('<@p1>「水果」');
+  });
+
+  it('跳過：丟掉這張牌', () => {
+    const s = guessing();
+    const { state } = run([{ type: 'skipGuess', user: 'p4' }], s);
+    expect(state).toMatchObject({ score: 0, card: 2 });
+    expect(state.deck).toHaveLength(s.deck.length - 1);
+  });
+
+  it('猜錯：這張和牌堆最上面一張都丟掉；牌堆空了改丟一張得分的牌', () => {
+    const s = guessing();
+    const { state, events } = guess('p4', '不是這個', s);
+    expect(announces(events).join('\n')).toContain('猜錯');
+    expect(state).toMatchObject({ score: 0, card: 2 });
+    expect(state.deck).toHaveLength(s.deck.length - 2);
+    const last = { ...s, deck: [], score: 3 };
+    expect(guess('p4', '不是這個', last).state.score).toBe(2);
+  });
+
+  it('只有猜詞的人能猜或跳過；90 秒超時算跳過', () => {
+    const s = guessing();
+    expect(ephemeralTo(guess('p1', s.word!, s).events, 'p1')).toBeDefined();
+    expect(ephemeralTo(run([{ type: 'skipGuess', user: 'p1' }], s).events, 'p1')).toBeDefined();
+    const st = clues([['p1', 'a'], ['p2', 'b'], ['p3', 'c']], started(4).state);
+    expect(run([{ type: 'timeout', id: lastTimer(st.events).id }], st.state).state).toMatchObject({ score: 0, card: 2 });
+  });
+
+  it('房主 next：給提示階段直接結束給提示，猜詞階段算跳過', () => {
+    expect(run([{ type: 'skipStep', user: 'p1' }], started(4).state).state.phase).toBe('guess');
+    expect(run([{ type: 'skipStep', user: 'p1' }], guessing()).state).toMatchObject({ card: 2, score: 0 });
+    expect(ephemeralTo(run([{ type: 'skipStep', user: 'p2' }], guessing()).events, 'p2')).toBeDefined();
+  });
+});

@@ -41,6 +41,9 @@ export type JAction =
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
   | { type: 'clue'; user: string; word: string }
+  | { type: 'guess'; user: string; word: string }
+  | { type: 'skipGuess'; user: string }
+  | { type: 'skipStep'; user: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<JAction, { type: 'new' }>;
@@ -139,6 +142,35 @@ function endClues(c: Ctx) {
   startTimer(c, GUESS_MS);
 }
 
+// 猜詞結果：猜對得分；跳過丟掉這張；猜錯再多丟一張（牌堆空了就丟一張得分的牌）
+function finishGuess(c: Ctx, result: 'right' | 'skip' | 'wrong') {
+  const s = c.s;
+  const lines = [
+    result === 'right' ? `🎉 猜對了！答案是「${s.word}」` : result === 'skip' ? `⏭️ 跳過，答案是「${s.word}」` : `❌ 猜錯了，答案是「${s.word}」`,
+  ];
+  if (result === 'right') s.score++;
+  if (result === 'wrong') {
+    if (s.deck.length) {
+      s.deck.shift();
+      lines.push('另外從牌堆多丟掉一張牌。');
+    } else if (s.score > 0) {
+      s.score--;
+      lines.push('牌堆沒牌了，改成丟掉一張得分的牌。');
+    }
+  }
+  if (s.removed.length) lines.push(`被刪掉的提示：${s.removed.join('、')}`);
+  lines.push(`目前得分 ${s.score}，牌堆剩 ${s.deck.length} 張`);
+  c.events.push({ type: 'announce', text: lines.join('\n') });
+  s.guesser = (s.guesser + 1) % s.players.length;
+  if (s.deck.length) startRound(c);
+  else endGame(c);
+}
+
+function endGame(c: Ctx) {
+  c.s.phase = 'ended';
+  c.s.timers = {};
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -191,9 +223,27 @@ function handle(c: Ctx, action: GameAction): boolean {
     }
     case 'clue':
       return giveClue(c, action.user, action.word);
+    case 'guess': {
+      if (s.phase !== 'guess' || action.user !== s.players[s.guesser].id) return reply(c, action.user, '現在不是你猜詞。');
+      finishGuess(c, normalize(action.word) === normalize(s.word!) ? 'right' : 'wrong');
+      return true;
+    }
+    case 'skipGuess': {
+      if (s.phase !== 'guess' || action.user !== s.players[s.guesser].id) return reply(c, action.user, '只有猜詞的人可以跳過。');
+      finishGuess(c, 'skip');
+      return true;
+    }
+    case 'skipStep': {
+      if (s.phase !== 'clue' && s.phase !== 'guess') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過。');
+      if (s.phase === 'clue') endClues(c);
+      else finishGuess(c, 'skip');
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
       if (s.phase === 'clue') endClues(c);
+      else if (s.phase === 'guess') finishGuess(c, 'skip');
       else return false;
       return true;
     }
