@@ -63,6 +63,7 @@ export type UAction =
   | { type: 'endSpeech'; user: string }
   | { type: 'skipSpeaker'; user: string }
   | { type: 'endDiscussion'; user: string }
+  | { type: 'dayVote'; user: string; target: string } // target 是玩家 id 或 'abstain'
   | { type: 'timeout'; id: number };
 
 interface Result {
@@ -157,6 +158,11 @@ function nextSpeaker(c: Ctx) {
     return;
   }
   s.speaker = undefined;
+  if (s.phase === 'pkSpeech') {
+    const voters = alive(s).filter((p) => !s.candidates.includes(p.id)).map((p) => p.id);
+    openVote(c, 'pkVote', s.candidates, voters);
+    return;
+  }
   startVote(c);
 }
 
@@ -166,20 +172,63 @@ function botDescribe(c: Ctx, id: string) {
 }
 
 function startVote(c: Ctx) {
+  const ids = alive(c.s).map((p) => p.id);
+  openVote(c, 'vote', ids, ids);
+}
+
+function openVote(c: Ctx, phase: 'vote' | 'pkVote', candidates: string[], voters: string[]) {
   const s = c.s;
-  const ids = alive(s).map((p) => p.id);
-  s.phase = 'vote';
+  s.phase = phase;
   s.votes = {};
-  s.candidates = ids;
-  s.voters = ids;
+  s.candidates = candidates;
+  s.voters = voters;
   c.events.push({
     type: 'prompt',
-    kind: 'dayVote',
+    kind: phase === 'vote' ? 'dayVote' : 'pkVote',
     audience: 'channel',
-    text: '🗳️ 請投票選出臥底。',
-    options: [...ids.map((id) => ({ value: id, label: id })), { value: 'abstain', label: '棄票' }],
+    text: phase === 'vote' ? '🗳️ 請投票選出臥底。' : '⚔️ PK 投票：請在平票的玩家中選一位（PK 中的玩家不能投票）。',
+    options: [...candidates.map((id) => ({ value: id, label: id })), { value: 'abstain', label: '棄票' }],
   });
   startTimer(c, VOTE_MS);
+  if (!voters.length) endVote(c);
+}
+
+function endVote(c: Ctx) {
+  const s = c.s;
+  const lines = s.voters.map((v) => {
+    const t = s.votes[v] ?? 'abstain';
+    return `${mention(v)} → ${t === 'abstain' ? '棄票' : mention(t)}`;
+  });
+  c.events.push({ type: 'announce', text: `🗳️ 投票結果：\n${lines.join('\n')}` });
+  const tally = new Map<string, number>();
+  for (const t of Object.values(s.votes)) if (t !== 'abstain') tally.set(t, (tally.get(t) ?? 0) + 1);
+  const max = Math.max(0, ...tally.values());
+  const top = [...tally].filter(([, k]) => k === max).map(([id]) => id);
+  if (top.length > 1 && s.phase === 'vote') {
+    startPk(c, top);
+    return;
+  }
+  if (top.length !== 1) {
+    c.events.push({ type: 'announce', text: '🗳️ 這一輪沒有人出局。' });
+    startRound(c);
+    return;
+  }
+  eliminate(c, top[0]);
+}
+
+function startPk(c: Ctx, tied: string[]) {
+  const s = c.s;
+  s.phase = 'pkSpeech';
+  s.candidates = tied;
+  s.speakers = s.players.map((p) => p.id).filter((id) => tied.includes(id));
+  c.events.push({ type: 'announce', text: `⚔️ 平票！${tied.map(mention).join('、')} 進入 PK，依序再描述一次。`, gif: 'pk' });
+  nextSpeaker(c);
+}
+
+function eliminate(c: Ctx, id: string) {
+  c.s.players.find((p) => p.id === id)!.alive = false;
+  c.events.push({ type: 'announce', text: `🚪 ${mention(id)} 出局。`, gif: 'exile' });
+  startRound(c);
 }
 
 const isSpeaking = (s: UState) => s.phase === 'speech' || s.phase === 'pkSpeech';
@@ -282,9 +331,23 @@ function handle(c: Ctx, action: Exclude<UAction, { type: 'new' }>): boolean {
       startVote(c);
       return true;
     }
+    case 'dayVote': {
+      if (s.phase !== 'vote' && s.phase !== 'pkVote') return false;
+      const voter = s.players.find((p) => p.id === action.user);
+      if (!voter) return false;
+      if (!voter.alive) return reply(c, action.user, '你已經出局，不能投票。');
+      if (!s.voters.includes(action.user)) return reply(c, action.user, 'PK 中的玩家不能投票。');
+      if (action.target !== 'abstain' && !s.candidates.includes(action.target)) return false;
+      s.votes[action.user] = action.target;
+      const choice = action.target === 'abstain' ? '你選擇棄票。' : `你投給了 ${mention(action.target)}。`;
+      c.events.push({ type: 'ephemeral', to: action.user, text: choice });
+      if (s.voters.every((v) => s.votes[v])) endVote(c);
+      return true;
+    }
     case 'timeout': {
       if (action.id !== s.timers.phase) return false;
       if (isSpeaking(s)) nextSpeaker(c);
+      else if (s.phase === 'vote' || s.phase === 'pkVote') endVote(c);
       else return false;
       return true;
     }
