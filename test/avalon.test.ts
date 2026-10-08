@@ -125,3 +125,52 @@ describe('avalon/setup: 身分私訊', () => {
     for (const name of ['梅林', '派西維爾', '忠臣', '刺客', '莫甘娜', '爪牙']) expect(text).not.toMatch(new RegExp(`<@p\\d>\\S*${name}`));
   });
 });
+
+const prompts = (events: GameEvent[], kind: string) =>
+  events.filter((e) => e.type === 'prompt' && e.kind === kind) as Extract<GameEvent, { type: 'prompt' }>[];
+const timers = (events: GameEvent[]) => events.filter((e) => e.type === 'startTimer') as { id: number; ms: number }[];
+const lastTimer = (events: GameEvent[]) => timers(events).at(-1)!;
+const values = (p: { options: { value: string }[] }) => p.options.map((o) => o.value);
+// 依序讓目前的發言者都按結束發言
+const finishSpeech = (s: AState) => {
+  let res = { state: s, events: [] as GameEvent[] };
+  for (let i = 0; i < 20 && res.state.phase === 'speech'; i++) res = run([{ type: 'endSpeech', user: res.state.speaker! }], res.state);
+  return res;
+};
+
+// rng 固定時第一位隊長是最後一位玩家
+describe('avalon/rounds: 隊長與輪流發言', () => {
+  it('開始後公告任務、隊伍人數、隊長、進度和否決次數，從隊長的下一位開始發言', () => {
+    const { state, events } = started(5);
+    const text = announces(events).join('\n');
+    expect(text).toContain('任務 1');
+    expect(text).toContain('隊伍 2 人');
+    expect(text).toContain('隊長 <@p5>');
+    expect(text).toContain('連續否決：0／5');
+    expect(state).toMatchObject({ phase: 'speech', speaker: 'p1' });
+    const p = prompts(events, 'endSpeech').at(-1)!;
+    expect(p.text).toContain('輪到 <@p1> 發言（40 秒）');
+    expect(values(p)).toEqual(['p1']);
+    expect(lastTimer(events).ms).toBe(40_000);
+  });
+
+  it('隊長最後一個發言', () => {
+    const { state } = started(5, () => 0);
+    expect(state.speaker).toBe('p2');
+    expect(state.speakers).toEqual(['p3', 'p4', 'p5', 'p1']);
+  });
+
+  it('只有目前的發言者能結束發言；時間到或房主 next 換下一位', () => {
+    const { state, events } = started(5);
+    const denied = run([{ type: 'endSpeech', user: 'p2' }], state);
+    expect(denied.state.speaker).toBe('p1');
+    expect(ephemeralTo(denied.events, 'p2')).toBeDefined();
+    expect(run([{ type: 'timeout', id: lastTimer(events).id }], state).state.speaker).toBe('p2');
+    expect(run([{ type: 'skipSpeaker', user: 'p1' }], state).state.speaker).toBe('p2');
+    expect(ephemeralTo(run([{ type: 'skipSpeaker', user: 'p2' }], state).events, 'p2')).toBeDefined();
+  });
+
+  it('所有人發言完進入隊長選人', () => {
+    expect(finishSpeech(started(5).state).state.phase).toBe('pick');
+  });
+});

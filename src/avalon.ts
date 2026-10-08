@@ -5,6 +5,18 @@ import { isBot, mention, type GameEvent, type Rng } from './engine.js';
 export const MIN_AVALON_PLAYERS = 5;
 export const MAX_AVALON_PLAYERS = 10;
 const TITLE = '阿瓦隆';
+const SPEECH_MS = 40_000;
+const MAX_REJECTS = 5;
+
+// 人數 → 5 個任務的隊伍人數；7 人以上第 4 個任務要 2 張失敗票
+const QUESTS: Record<number, number[]> = {
+  5: [2, 3, 2, 3, 3],
+  6: [2, 3, 4, 3, 4],
+  7: [2, 3, 3, 4, 4],
+  8: [3, 4, 4, 5, 5],
+  9: [3, 4, 4, 5, 5],
+  10: [3, 4, 4, 5, 5],
+};
 
 export type APhase = 'lobby' | 'speech' | 'pick' | 'teamVote' | 'quest' | 'assassinate' | 'ended';
 
@@ -26,6 +38,12 @@ export interface AState {
   host: string;
   phase: APhase;
   players: APlayer[];
+  leader: number; // 隊長在 players 裡的位置
+  quest: number; // 目前是第幾個任務（0 起算）
+  results: ('success' | 'fail')[];
+  rejects: number; // 這個任務連續被否決幾次
+  speakers: string[];
+  speaker?: string;
   timerSeq: number;
   timers: { phase?: number };
 }
@@ -38,6 +56,8 @@ export type AAction =
   | { type: 'cancel'; user: string }
   | { type: 'addBot'; user: string; count: number }
   | { type: 'removeBot'; user: string; count: number }
+  | { type: 'endSpeech'; user: string }
+  | { type: 'skipSpeaker'; user: string }
   | { type: 'timeout'; id: number };
 
 type GameAction = Exclude<AAction, { type: 'new' }>;
@@ -115,6 +135,48 @@ function deal(c: Ctx) {
   c.events.push({ type: 'wolfChat', wolves: evilIds, text: `😈 這是壞人的私訊群組：${list(evilIds)}\n可以在這裡討論，好人看不到。` });
 }
 
+function startTimer(c: Ctx, ms: number) {
+  c.s.timers.phase = ++c.s.timerSeq;
+  c.events.push({ type: 'startTimer', id: c.s.timerSeq, ms });
+}
+
+const teamSize = (s: AState) => QUESTS[s.players.length][s.quest];
+const progress = (s: AState) =>
+  Array.from({ length: 5 }, (_, i) => (s.results[i] === 'success' ? '✅' : s.results[i] === 'fail' ? '❌' : '⬜')).join('');
+
+// 開始一次組隊：公告任務資訊，從隊長的下一位開始輪流發言，隊長最後
+function startRound(c: Ctx) {
+  const s = c.s;
+  const n = s.players.length;
+  const leader = s.players[s.leader].id;
+  const twoFails = n >= 7 && s.quest === 3 ? '（需要 2 張失敗票才算失敗）' : '';
+  c.events.push({
+    type: 'announce',
+    text: `📜 任務 ${s.quest + 1}／5：隊伍 ${teamSize(s)} 人${twoFails}，隊長 ${mention(leader)}\n任務進度：${progress(s)}　連續否決：${s.rejects}／${MAX_REJECTS}`,
+  });
+  s.phase = 'speech';
+  s.speakers = Array.from({ length: n }, (_, i) => s.players[(s.leader + 1 + i) % n].id);
+  nextSpeaker(c);
+}
+
+function nextSpeaker(c: Ctx) {
+  const s = c.s;
+  const id = s.speakers.shift();
+  s.speaker = id;
+  if (!id) {
+    s.phase = 'pick';
+    return;
+  }
+  c.events.push({
+    type: 'prompt',
+    kind: 'endSpeech',
+    audience: 'channel',
+    text: `🎤 輪到 ${mention(id)} 發言（${SPEECH_MS / 1000} 秒）`,
+    options: [{ value: id, label: '結束發言' }],
+  });
+  startTimer(c, SPEECH_MS);
+}
+
 const reply = (c: Ctx, to: string, text: string) => {
   c.events.push({ type: 'ephemeral', to, text });
   return false;
@@ -175,7 +237,8 @@ function handle(c: Ctx, action: GameAction): boolean {
       if (n < MIN_AVALON_PLAYERS) return reply(c, action.user, `目前 ${n} 人，至少需要 ${MIN_AVALON_PLAYERS} 人才能開始。`);
       c.events.push(lobbyEvent({ ...s, phase: 'speech' }));
       deal(c);
-      s.phase = 'speech';
+      s.leader = Math.floor(c.rng() * n);
+      startRound(c);
       return true;
     }
     case 'cancel': {
@@ -185,8 +248,24 @@ function handle(c: Ctx, action: GameAction): boolean {
       c.events.push({ type: 'announce', text: '🛑 房主已取消遊戲。' });
       return true;
     }
-    case 'timeout':
-      return false;
+    case 'endSpeech': {
+      if (s.phase !== 'speech') return false;
+      if (action.user !== s.speaker) return reply(c, action.user, '現在不是你的發言時間。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'skipSpeaker': {
+      if (s.phase !== 'speech') return false;
+      if (action.user !== s.host) return reply(c, action.user, '只有房主可以跳過發言者。');
+      nextSpeaker(c);
+      return true;
+    }
+    case 'timeout': {
+      if (action.id !== s.timers.phase) return false;
+      if (s.phase === 'speech') nextSpeaker(c);
+      else return false;
+      return true;
+    }
   }
 }
 
@@ -210,6 +289,11 @@ function createLobby(prev: AState | undefined, host: string, channel: string): R
     host,
     phase: 'lobby',
     players: [{ id: host }],
+    leader: 0,
+    quest: 0,
+    results: [],
+    rejects: 0,
+    speakers: [],
     timerSeq: prev?.timerSeq ?? 0,
     timers: {},
   };
