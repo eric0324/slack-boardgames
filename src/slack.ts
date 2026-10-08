@@ -32,7 +32,7 @@ const HELP = [
   '• `/werewolf vote`：結束輪流發言，直接投票（房主）',
   '• `/werewolf cancel`：取消遊戲（房主）',
   '• `/werewolf stats [@某人]`：查詢自己或別人在這個頻道的戰績（任何人）',
-  `📖 完整說明：<${encodeURI('https://github.com/eric0324/slack-boardgames/wiki/狼人殺-指令')}|指令>、<${RULES_URL}|遊戲規則>`,
+  `📖 完整說明：<${encodeURI('https://github.com/eric0324/slack-gamebuddy/wiki/狼人殺-指令')}|指令>、<${RULES_URL}|遊戲規則>`,
 ].join('\n');
 
 export function parseCommand(text: string, user: string, channel: string): Action | null {

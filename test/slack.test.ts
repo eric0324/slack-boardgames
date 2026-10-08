@@ -408,7 +408,7 @@ describe('Slack：使用說明', () => {
     for (const cmd of ['new', 'addbot', 'removebot', 'start', 'next', 'vote', 'cancel', 'stats']) {
       expect(lines.filter((l: string) => l.includes(`/werewolf ${cmd}`)).length, cmd).toBe(1);
     }
-    expect(lines.at(-1)).toContain('https://github.com/eric0324/slack-boardgames/wiki/');
+    expect(lines.at(-1)).toContain('https://github.com/eric0324/slack-gamebuddy/wiki/');
   });
 
   it('只輸入 /werewolf 或不認識的子指令，回覆同一份說明', async () => {
